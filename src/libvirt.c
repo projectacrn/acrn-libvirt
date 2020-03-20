@@ -1003,6 +1003,9 @@ virConnectOpenInternal(const char *name,
 #ifndef WITH_VZ
              STRCASEEQ(ret->uri->scheme, "parallels") ||
 #endif
+#ifndef WITH_ACRN
+             STRCASEEQ(ret->uri->scheme, "acrn") ||
+#endif
              false)) {
             virReportErrorHelper(VIR_FROM_NONE, VIR_ERR_CONFIG_UNSUPPORTED,
                                  __FILE__, __FUNCTION__, __LINE__,

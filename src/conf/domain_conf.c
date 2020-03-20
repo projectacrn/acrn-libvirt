@@ -130,6 +130,7 @@ VIR_ENUM_IMPL(virDomainVirt,
               "parallels",
               "bhyve",
               "vz",
+              "acrn",
 );
 
 VIR_ENUM_IMPL(virDomainOS,
@@ -15577,6 +15578,7 @@ virDomainVideoDefaultType(const virDomainDef *def)
     case VIR_DOMAIN_VIRT_OPENVZ:
     case VIR_DOMAIN_VIRT_HYPERV:
     case VIR_DOMAIN_VIRT_PHYP:
+    case VIR_DOMAIN_VIRT_ACRN:
     case VIR_DOMAIN_VIRT_NONE:
     case VIR_DOMAIN_VIRT_LAST:
     default:

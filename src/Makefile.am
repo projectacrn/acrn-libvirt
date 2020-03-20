@@ -120,6 +120,7 @@ include bhyve/Makefile.inc.am
 include libxl/Makefile.inc.am
 include vz/Makefile.inc.am
 include lxc/Makefile.inc.am
+include acrn/Makefile.inc.am
 include interface/Makefile.inc.am
 include network/Makefile.inc.am
 include nwfilter/Makefile.inc.am

@@ -144,6 +144,7 @@ VIR_ENUM_IMPL(virErrorDomain,
 
               "TPM", /* 70 */
               "BPF",
+              "ACRN driver",
 );
 
 

@@ -372,6 +372,10 @@ static int daemonInitialize(void)
     if (virDriverLoadModule("vz", "vzRegister", false) < 0)
         return -1;
 # endif
+# ifdef WITH_ACRN
+    if (virDriverLoadModule("acrn", "acrnRegister", false) < 0)
+        return -1;
+# endif
 #endif
     return 0;
 }
