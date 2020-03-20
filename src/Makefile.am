@@ -727,6 +727,7 @@ DRIVER_SOURCE_FILES = \
 	$(VMWARE_DRIVER_SOURCES) \
 	$(XEN_DRIVER_SOURCES) \
 	$(XENAPI_DRIVER_SOURCES) \
+	$(ACRN_DRIVER_SOURCES) \
 	$(NULL)
 
 STATEFUL_DRIVER_SOURCE_FILES = \
@@ -743,6 +744,7 @@ STATEFUL_DRIVER_SOURCE_FILES = \
 	$(UML_DRIVER_SOURCES) \
 	$(XEN_DRIVER_SOURCES) \
 	$(VZ_DRIVER_SOURCES) \
+	$(ACRN_DRIVER_SOURCES) \
 	$(NULL)
 
 
@@ -1043,6 +1045,15 @@ INTERFACE_DRIVER_SOURCES += \
 		interface/interface_backend_udev.c
 endif WITH_UDEV
 endif WITH_INTERFACE
+
+if WITH_ACRN
+ACRN_DRIVER_SOURCES = \
+		acrn/acrn_driver.h \
+		acrn/acrn_driver.c \
+		acrn/acrn_domain.h \
+		acrn/acrn_domain.c \
+		$(NULL)
+endif WITH_ACRN
 
 SECRET_UTIL_SOURCES = \
 		secret/secret_util.h secret/secret_util.c
@@ -1557,6 +1568,12 @@ libvirt_driver_esx_la_SOURCES = $(ESX_DRIVER_SOURCES)
 libvirt_driver_esx_la_DEPENDENCIES = $(ESX_DRIVER_GENERATED)
 endif WITH_ESX
 
+if WITH_ACRN
+noinst_LTLIBRARIES += libvirt_driver_acrn.la
+libvirt_la_BUILT_LIBADD += libvirt_driver_acrn.la
+libvirt_driver_acrn_la_CFLAGS = -I$(srcdir)/conf $(AM_CFLAGS)
+libvirt_driver_acrn_la_SOURCES = $(ACRN_DRIVER_SOURCES)
+endif WITH_ACRN
 
 BUILT_SOURCES += $(HYPERV_DRIVER_GENERATED)
 
@@ -2029,6 +2046,7 @@ EXTRA_DIST += \
 		$(HYPERV_DRIVER_EXTRA_DIST) \
 		$(VZ_DRIVER_SOURCES) \
 		$(BHYVE_DRIVER_SOURCES) \
+		$(ACRN_DRIVER_SOURCES) \
 		$(NETWORK_DRIVER_SOURCES) \
 		$(INTERFACE_DRIVER_SOURCES) \
 		$(STORAGE_DRIVER_SOURCES) \

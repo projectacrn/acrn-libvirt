@@ -119,7 +119,8 @@ VIR_ENUM_IMPL(virDomainVirt, VIR_DOMAIN_VIRT_LAST,
               "phyp",
               "parallels",
               "bhyve",
-              "vz")
+              "vz",
+              "acrn")
 
 VIR_ENUM_IMPL(virDomainOS, VIR_DOMAIN_OSTYPE_LAST,
               "hvm",
