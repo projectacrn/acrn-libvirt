@@ -354,6 +354,9 @@ static void daemonInitialize(void)
 #ifdef WITH_VZ
     VIR_DAEMON_LOAD_MODULE(vzRegister, "vz");
 #endif
+#ifdef WITH_ACRN
+    VIR_DAEMON_LOAD_MODULE(acrnRegister, "acrn");
+#endif
 }
 #undef VIR_DAEMON_LOAD_MODULE
 

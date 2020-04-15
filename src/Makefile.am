@@ -1569,10 +1569,19 @@ libvirt_driver_esx_la_DEPENDENCIES = $(ESX_DRIVER_GENERATED)
 endif WITH_ESX
 
 if WITH_ACRN
-noinst_LTLIBRARIES += libvirt_driver_acrn.la
-libvirt_la_BUILT_LIBADD += libvirt_driver_acrn.la
-libvirt_driver_acrn_la_CFLAGS = -I$(srcdir)/conf $(AM_CFLAGS)
-libvirt_driver_acrn_la_SOURCES = $(ACRN_DRIVER_SOURCES)
+noinst_LTLIBRARIES += libvirt_driver_acrn_impl.la
+libvirt_driver_acrn_la_SOURCES =
+libvirt_driver_acrn_la_LIBADD = libvirt_driver_acrn_impl.la
+mod_LTLIBRARIES += libvirt_driver_acrn.la
+libvirt_driver_acrn_la_LIBADD += ../gnulib/lib/libgnu.la
+libvirt_driver_acrn_la_LDFLAGS = -module -avoid-version $(AM_LDFLAGS)
+
+libvirt_driver_acrn_impl_la_CFLAGS = \
+		-I$(srcdir)/conf \
+		$(AM_CFLAGS)
+libvirt_driver_acrn_impl_la_LDFLAGS = $(AM_LDFLAGS)
+libvirt_driver_acrn_impl_la_LIBADD = libvirt_conf.la libvirt_util.la
+libvirt_driver_acrn_impl_la_SOURCES = $(ACRN_DRIVER_SOURCES)
 endif WITH_ACRN
 
 BUILT_SOURCES += $(HYPERV_DRIVER_GENERATED)
