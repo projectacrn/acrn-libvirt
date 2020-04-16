@@ -1,7 +1,9 @@
 #include <config.h>
 
 #include "acrn_domain.h"
+#include "acrn_device.h"
 #include "viralloc.h"
+#include "virfile.h"
 #include "virlog.h"
 
 #define VIR_FROM_THIS VIR_FROM_ACRN
@@ -17,7 +19,7 @@ acrnDomainDefPostParse(virDomainDefPtr def,
 {
     /* Add an implicit PCI root controller */
     if (virDomainDefMaybeAddController(def, VIR_DOMAIN_CONTROLLER_TYPE_PCI, 0,
-                                       VIR_DOMAIN_CONTROLLER_MODEL_PCIE_ROOT) < 0)
+                                       VIR_DOMAIN_CONTROLLER_MODEL_PCI_ROOT) < 0)
         return -1;
 
     return 0;
@@ -54,7 +56,8 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
                 return -1;
             }
 
-            if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
+            if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_NONE &&
+                info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
                 virReportError(VIR_ERR_XML_ERROR,
                                _("disk address type %s not supported"),
                                virDomainDeviceAddressTypeToString(info->type));
@@ -81,16 +84,22 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
         virDomainNetDefPtr net = dev->data.net;
         info = virDomainDeviceGetInfo(dev);
 
-        if (net->type != VIR_DOMAIN_NET_TYPE_ETHERNET) {
+        if (net->type == VIR_DOMAIN_NET_TYPE_ETHERNET) {
+            if (!net->ifname) {
+                virReportError(VIR_ERR_XML_ERROR,
+                               _("net dev undefined"));
+                return -1;
+            }
+        } else if (net->type == VIR_DOMAIN_NET_TYPE_BRIDGE) {
+            if (!virDomainNetGetActualBridgeName(net)) {
+                virReportError(VIR_ERR_XML_ERROR,
+                               _("bridge name undefined"));
+                return -1;
+            }
+        } else {
             virReportError(VIR_ERR_XML_ERROR,
                            _("net type %s not supported"),
                            virDomainNetTypeToString(net->type));
-            return -1;
-        }
-
-        if (!net->ifname) {
-            virReportError(VIR_ERR_XML_ERROR,
-                           _("net dev undefined"));
             return -1;
         }
 
@@ -100,7 +109,8 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
             return -1;
         }
 
-        if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
+        if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_NONE &&
+            info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
             virReportError(VIR_ERR_XML_ERROR,
                            _("net address type %s not supported"),
                            virDomainDeviceAddressTypeToString(info->type));
@@ -135,7 +145,8 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
             return -1;
         }
 
-        if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
+        if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_NONE &&
+            info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
             virReportError(VIR_ERR_XML_ERROR,
                            _("hostdev address type %s not supported"),
                            virDomainDeviceAddressTypeToString(info->type));
@@ -157,7 +168,7 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
 
         if (ctrl->type == VIR_DOMAIN_CONTROLLER_TYPE_PCI) {
             if ((virDomainControllerModelPCI)ctrl->model !=
-                VIR_DOMAIN_CONTROLLER_MODEL_PCIE_ROOT) {
+                VIR_DOMAIN_CONTROLLER_MODEL_PCI_ROOT) {
                 virReportError(VIR_ERR_XML_ERROR,
                                _("PCI controller model %s not supported"),
                                virDomainControllerModelPCITypeToString(ctrl->model));
@@ -166,7 +177,8 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
         } else {
             info = virDomainDeviceGetInfo(dev);
 
-            if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
+            if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_NONE &&
+                info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI) {
                 virReportError(VIR_ERR_XML_ERROR,
                                _("controller address type %s not supported"),
                                virDomainDeviceAddressTypeToString(info->type));
@@ -185,7 +197,8 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
                                    _("serial over tcp must be in listen mode"));
                     return -1;
                 }
-            } else if (chr->source->type != VIR_DOMAIN_CHR_TYPE_DEV &&
+            } else if (chr->source->type != VIR_DOMAIN_CHR_TYPE_PTY &&
+                       chr->source->type != VIR_DOMAIN_CHR_TYPE_DEV &&
                        chr->source->type != VIR_DOMAIN_CHR_TYPE_STDIO) {
                 virReportError(VIR_ERR_XML_ERROR,
                                _("serial type %s not supported"),
@@ -222,7 +235,18 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
                 return -1;
             }
 
-            if (chr->targetType != VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_VIRTIO) {
+            /*
+             * VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_NONE will later be
+             * converted to VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL.
+             *
+             * These types are considered as an implicit device and
+             * will be ignored.
+             *
+             * Only def->consoles[0] is allowed to be a serial port.
+             */
+            if (chr->targetType != VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_NONE &&
+                chr->targetType != VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL &&
+                chr->targetType != VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_VIRTIO) {
                 virReportError(VIR_ERR_XML_ERROR,
                                _("console target type %s not supported"),
                                virDomainChrConsoleTargetTypeToString(
@@ -230,7 +254,9 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
                 return -1;
             }
 
-            if (info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI &&
+            if (chr->targetType == VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_VIRTIO &&
+                info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_NONE &&
+                info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_PCI &&
                 info->type != VIR_DOMAIN_DEVICE_ADDRESS_TYPE_VIRTIO_SERIAL) {
                 virReportError(VIR_ERR_XML_ERROR,
                                _("virtio-console address type %s not supported"),
@@ -260,14 +286,66 @@ acrnDomainDeviceDefPostParse(virDomainDeviceDefPtr dev,
     return 0;
 }
 
+static int
+acrnDomainDefAssignAddresses(virDomainDef *def,
+                             virCapsPtr caps ATTRIBUTE_UNUSED,
+                             unsigned int parseFlags ATTRIBUTE_UNUSED,
+                             void *opaque ATTRIBUTE_UNUSED,
+                             void *parseOpaque ATTRIBUTE_UNUSED)
+{
+    return acrnDomainAssignAddresses(def);
+}
+
 static virDomainDefParserConfig virAcrnDriverDomainDefParserConfig = {
     .devicesPostParseCallback = acrnDomainDeviceDefPostParse,
     .domainPostParseCallback = acrnDomainDefPostParse,
+    .assignAddressesCallback = acrnDomainDefAssignAddresses,
+};
+
+static void *
+acrnDomainObjPrivateAlloc(void *opaque ATTRIBUTE_UNUSED)
+{
+    acrnDomainObjPrivatePtr priv;
+
+    if (VIR_ALLOC(priv) < 0)
+        return NULL;
+
+    return priv;
+}
+
+void
+acrnDomainTtyCleanup(acrnDomainObjPrivatePtr priv)
+{
+    size_t i = priv->nttys;
+
+    while (i--) {
+        VIR_FREE(priv->ttys[i].slave);
+        VIR_FORCE_CLOSE(priv->ttys[i].fd);
+        priv->ttys[i].fd = 0;
+    }
+
+    priv->nttys = 0;
+}
+
+static void
+acrnDomainObjPrivateFree(void *data)
+{
+    /* priv is guaranteed non-NULL */
+    acrnDomainObjPrivatePtr priv = data;
+
+    acrnDomainTtyCleanup(priv);
+    VIR_FREE(priv);
+}
+
+static virDomainXMLPrivateDataCallbacks virAcrnDriverPrivateDataCallbacks = {
+    .alloc = acrnDomainObjPrivateAlloc,
+    .free = acrnDomainObjPrivateFree,
 };
 
 virDomainXMLOptionPtr
 virAcrnDriverCreateXMLConf(void)
 {
     return virDomainXMLOptionNew(&virAcrnDriverDomainDefParserConfig,
-                                 NULL, NULL, NULL, NULL);
+                                 &virAcrnDriverPrivateDataCallbacks,
+                                 NULL, NULL, NULL);
 }

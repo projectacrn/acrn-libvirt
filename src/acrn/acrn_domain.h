@@ -3,5 +3,17 @@
 
 #include "domain_conf.h"
 
+typedef struct _acrnDomainObjPrivate acrnDomainObjPrivate;
+typedef acrnDomainObjPrivate *acrnDomainObjPrivatePtr;
+struct _acrnDomainObjPrivate {
+    unsigned char hvUUID[VIR_UUID_BUFLEN];
+    struct {
+        int fd;
+        char *slave;
+    } ttys[4];
+    size_t nttys;
+};
+
+void acrnDomainTtyCleanup(acrnDomainObjPrivatePtr priv);
 virDomainXMLOptionPtr virAcrnDriverCreateXMLConf(void);
 #endif /* __ACRN_DOMAIN_H__ */

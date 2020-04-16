@@ -1052,6 +1052,8 @@ ACRN_DRIVER_SOURCES = \
 		acrn/acrn_driver.c \
 		acrn/acrn_domain.h \
 		acrn/acrn_domain.c \
+		acrn/acrn_device.h \
+		acrn/acrn_device.c \
 		$(NULL)
 endif WITH_ACRN
 
@@ -1580,7 +1582,7 @@ libvirt_driver_acrn_impl_la_CFLAGS = \
 		-I$(srcdir)/conf \
 		$(AM_CFLAGS)
 libvirt_driver_acrn_impl_la_LDFLAGS = $(AM_LDFLAGS)
-libvirt_driver_acrn_impl_la_LIBADD = libvirt_conf.la libvirt_util.la
+libvirt_driver_acrn_impl_la_LIBADD = libvirt_conf.la libvirt_util.la -luuid
 libvirt_driver_acrn_impl_la_SOURCES = $(ACRN_DRIVER_SOURCES)
 endif WITH_ACRN
 
