@@ -1048,6 +1048,7 @@ endif WITH_INTERFACE
 
 if WITH_ACRN
 ACRN_DRIVER_SOURCES = \
+		acrn/acrn_common.h \
 		acrn/acrn_driver.h \
 		acrn/acrn_driver.c \
 		acrn/acrn_domain.h \

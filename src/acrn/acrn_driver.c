@@ -1,6 +1,7 @@
 #include <config.h>
 #include <fcntl.h>
 #include <sys/sysinfo.h>
+#include <sys/ioctl.h>
 #include <uuid/uuid.h>
 #include <libxml/xpathInternals.h>
 #include "configmake.h"
@@ -22,6 +23,7 @@
 #include "virfdstream.h"
 #include "virlog.h"
 #include "domain_event.h"
+#include "acrn_common.h"
 #include "acrn_driver.h"
 #include "acrn_domain.h"
 
@@ -47,6 +49,8 @@ struct _acrnConnect {
     virDomainXMLOptionPtr xmlopt;
     virObjectEventStatePtr domainEventState;
     virHostdevManagerPtr hostdevMgr;
+    acrnPlatformInfo pi;
+    size_t *vcpuAllocMap;
 };
 
 typedef struct _acrnDomainNamespaceDef acrnDomainNamespaceDef;
@@ -54,6 +58,20 @@ typedef acrnDomainNamespaceDef *acrnDomainNamespaceDefPtr;
 struct _acrnDomainNamespaceDef {
     size_t num_args;
     char **args;
+};
+
+/*
+ * Since the maximum number of pCPUs is 64,
+ * the maximum number of VMs is 64.
+ */
+#define MAX_NUM_VMS     (64)
+
+struct acrnVmList {
+    struct acrnVmEntry {
+        acrnVmCfg cfg;
+        virBitmapPtr pcpus;
+    } vm[MAX_NUM_VMS];
+    size_t size;
 };
 
 static acrnConnectPtr acrn_driver = NULL;
@@ -104,8 +122,49 @@ acrnDomObjFromDomain(virDomainPtr domain)
     return vm;
 }
 
+static struct acrnVmList *
+acrnVmListNew(void)
+{
+    struct acrnVmList *list;
+
+    if (VIR_ALLOC(list) < 0)
+        return NULL;
+
+    return list;
+}
+
+static void
+acrnVmListFree(struct acrnVmList *list)
+{
+    size_t i;
+
+    for (i = 0; i < list->size; i++)
+        virBitmapFree(list->vm[i].pcpus);
+    VIR_FREE(list);
+}
+
+static int
+acrnGetVhmFd(void)
+{
+    struct stat st;
+    int fd = -1;
+
+    if (!stat("/dev/acrn_vhm", &st))
+        fd = open("/dev/acrn_vhm", O_RDWR|O_CLOEXEC);
+    else if (!stat("/dev/acrn_hsm", &st))
+        fd = open("/dev/acrn_hsm", O_RDWR|O_CLOEXEC);
+
+    return fd;
+}
+
+static int
+acrnGetPlatformInfo(int fd, acrnPlatformInfoPtr pi)
+{
+    return ioctl(fd, IC_GET_PLATFORM_INFO, pi);
+}
+
 struct acrnFindUUIDData {
-    unsigned char *uuid;
+    const unsigned char *uuid;
 };
 
 static int
@@ -126,31 +185,362 @@ acrnFindHvUUID(virDomainObjPtr vm, void *opaque)
     return ret;
 }
 
-static int
-acrnInitUUID(virDomainObjListPtr doms, unsigned char *uuid)
+/*
+ * This function must not be called with any virDomainObjPtr
+ * lock held, as it can attempt to hold any such lock in doms.
+ */
+static ssize_t
+acrnAllocateVm(virDomainObjListPtr doms, struct acrnVmList *vmList, bool rtvm,
+               size_t maxvcpus, unsigned char *uuid)
 {
-    static const char *const availUUIDStr[] = {
-        "d2795438-25d6-11e8-864e-cb7a18b34643",
-        "a7ada506-1ab0-4b6b-a0da-e513ca9b8c2f",
-    };
-    unsigned char availUUID[VIR_UUID_BUFLEN];
-    struct acrnFindUUIDData data = { .uuid = availUUID };
-    size_t i;
+    enum acrn_vm_severity severity;
+    struct acrnFindUUIDData data;
+    size_t i, start;
 
-    for (i = 0; i < ARRAY_CARDINALITY(availUUIDStr); i++) {
-        if (virUUIDParse(availUUIDStr[i], availUUID) < 0) {
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("virUUIDParse failed"));
+    severity = (rtvm) ? SEVERITY_RTVM : SEVERITY_STANDARD_VM;
+
+    /* determine where to begin the search, based on vcpu_num */
+    for (i = 0; i < vmList->size; i++) {
+        if (maxvcpus <= vmList->vm[i].cfg.vcpu_num)
             break;
-        }
+    }
 
-        if (!virDomainObjListForEach(doms, acrnFindHvUUID, &data)) {
-            uuid_copy(uuid, availUUID);
-            return 0;
+    start = i;
+
+    /* these VMs can fit maxvcpus */
+    for (; i < vmList->size; i++) {
+        if (vmList->vm[i].cfg.load_order == POST_LAUNCHED_VM &&
+            vmList->vm[i].cfg.severity == severity) {
+            data.uuid = vmList->vm[i].cfg.uuid;
+
+            if (!virDomainObjListForEach(doms, acrnFindHvUUID, &data)) {
+                uuid_copy(uuid, vmList->vm[i].cfg.uuid);
+                return (ssize_t)i;
+            }
         }
     }
 
+    i = start;
+
+    /* just try to find the best VM available */
+    while (i--) {
+        if (vmList->vm[i].cfg.load_order == POST_LAUNCHED_VM &&
+            vmList->vm[i].cfg.severity == severity) {
+            data.uuid = vmList->vm[i].cfg.uuid;
+
+            if (!virDomainObjListForEach(doms, acrnFindHvUUID, &data)) {
+                uuid_copy(uuid, vmList->vm[i].cfg.uuid);
+                return (ssize_t)i;
+            }
+        }
+    }
+
+    virReportError(VIR_ERR_INTERNAL_ERROR,
+                   _("no suitable VM found (%lu vCPUs)"), maxvcpus);
     return -1;
+}
+
+static ssize_t
+acrnFindVm(struct acrnVmList *vmList, unsigned char *uuid)
+{
+    size_t i;
+
+    for (i = 0; i < vmList->size; i++)
+        if (!uuid_compare(vmList->vm[i].cfg.uuid, uuid))
+            return (ssize_t)i;
+
+    return -1;
+}
+
+static int
+acrnAllocateVcpus(acrnPlatformInfoPtr pi, struct acrnVmEntry *vm,
+                  bool rtvm, size_t maxvcpus, size_t *allocMap,
+                  virBitmapPtr vcpus)
+{
+    ssize_t pos;
+    uint16_t totalCpus = pi->cpu_num;
+
+    while (maxvcpus--) {
+        uint16_t minAllocated = USHRT_MAX;
+        uint16_t candidate = totalCpus;
+
+        pos = -1;
+
+        /* find a pCPU that is least occupied */
+        while ((pos = virBitmapNextSetBit(vm->pcpus, pos)) >= 0 &&
+               pos < totalCpus) {
+            if (!virBitmapIsBitSet(vcpus, pos) &&
+                allocMap[pos] < minAllocated) {
+                minAllocated = allocMap[pos];
+                candidate = pos;
+            }
+        }
+
+        /* all of the pCPUs in the VM have been allocated */
+        if (candidate == totalCpus)
+            break;
+
+        VIR_DEBUG("vm(%s): minAllocated = %u, candidate = %u",
+                  vm->cfg.name, minAllocated, candidate);
+
+        if (virBitmapSetBit(vcpus, candidate) < 0 ||
+            (rtvm && minAllocated > 0)) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("vCPU placement failure"));
+            return -1;
+        }
+    }
+
+    pos = -1;
+
+    /* successful - update allocation map */
+    while ((pos = virBitmapNextSetBit(vcpus, pos)) >= 0) {
+        allocMap[pos] += 1;
+
+        VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
+                  pos, allocMap[pos],
+                  (allocMap[pos] > 1) ? "s" : "");
+    }
+
+    return 0;
+}
+
+static int
+acrnFreeVcpus(virBitmapPtr vcpus, size_t *allocMap)
+{
+    ssize_t pos = -1;
+    int ret = 0;
+
+    if (!vcpus || !allocMap)
+        return -1;
+
+    /* update allocation map */
+    while ((pos = virBitmapNextSetBit(vcpus, pos)) >= 0) {
+        if (allocMap[pos]) {
+            allocMap[pos] -= 1;
+
+            VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
+                      pos, allocMap[pos],
+                      (allocMap[pos] > 1) ? "s" : "");
+        } else {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("vCPU allocation map error (bit %ld)"),
+                           pos);
+            ret = -1;
+        }
+    }
+
+    return ret;
+}
+
+static int
+acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
+{
+    acrnVmCfgPtr vmcfg;
+    int fd, pos, ret = -1;
+    uint8_t *p;
+    uint16_t i, j;
+    uint64_t pcpus;
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
+
+    if (!pi || !vmList)
+        return 0;
+
+    vmList->size = 0;
+
+    if ((fd = acrnGetVhmFd()) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("acrnGetVhmFd failed"));
+        goto cleanup;
+    }
+
+    /* get basic platform info first */
+    if (!pi->vm_configs_addr) {
+        if (acrnGetPlatformInfo(fd, pi) < 0 ||
+            !pi->cpu_num || !pi->max_vms || !pi->vm_config_entry_size) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("acrnGetPlatformInfo failed"));
+            goto cleanup;
+        }
+
+        if (pi->version < 0x100) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("ACRN platform version too old: 0x%x"),
+                           pi->version);
+            goto cleanup;
+        }
+
+        if (!(pi->vm_configs_addr = (uint64_t)calloc(
+                                                pi->max_vms,
+                                                pi->vm_config_entry_size))) {
+            virReportError(VIR_ERR_NO_MEMORY, NULL);
+            goto cleanup;
+        }
+    }
+
+    /* now get vm config */
+    if (acrnGetPlatformInfo(fd, pi) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("acrnGetPlatformInfo failed"));
+        goto cleanup;
+    }
+
+    p = (uint8_t *)pi->vm_configs_addr;
+
+    for (i = 0, vmcfg = (acrnVmCfgPtr)p;
+         i < pi->max_vms;
+         i++, vmcfg = (acrnVmCfgPtr)p) {
+        if (virUUIDIsValid(vmcfg->uuid)) {
+            if (vmList->size == ARRAY_CARDINALITY(vmList->vm)) {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                               _("only %lu VMs are supported"),
+                               ARRAY_CARDINALITY(vmList->vm));
+                goto cleanup;
+            }
+
+            if (!vmcfg->vcpu_num) {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                               _("no vCPU in vm[%u]"), i);
+                goto cleanup;
+            }
+
+            if (!(pcpus = vmcfg->cpu_affinity_bitmap)) {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                               _("no pCPU in vm[%u]"), i);
+                goto cleanup;
+            }
+
+            /* insertion sort based on vcpu_num */
+            for (j = 0; j < vmList->size; j++) {
+                if (vmcfg->vcpu_num < vmList->vm[j].cfg.vcpu_num)
+                    break;
+            }
+
+            if (j < vmList->size)
+                memmove(&vmList->vm[j+1], &vmList->vm[j],
+                        sizeof(vmList->vm[j]) * (vmList->size - j));
+
+            /* drop the hv-specific part of vmcfg */
+            memcpy(&vmList->vm[j].cfg, vmcfg, sizeof(*vmcfg));
+
+            if (!(vmList->vm[j].pcpus =
+                        virBitmapNew(
+                            sizeof(vmcfg->cpu_affinity_bitmap) * CHAR_BIT))) {
+                virReportError(VIR_ERR_NO_MEMORY, NULL);
+                goto cleanup;
+            }
+
+            /* convert cpu_affinity_bitmap to virBitmap */
+            while ((pos = ffsll(pcpus)) > 0) {
+                pos--;
+
+                if (virBitmapSetBit(vmList->vm[j].pcpus, pos) < 0) {
+                    virReportError(VIR_ERR_INTERNAL_ERROR,
+                                   _("virBitmapSetBit failed"));
+                    goto cleanup;
+                }
+                pcpus &= ~(1ULL << pos);
+            }
+
+            vmList->size++;
+        }
+
+        p += pi->vm_config_entry_size;
+    }
+
+    for (i = 0; i < vmList->size; i++)
+        VIR_DEBUG("vm[%u] (%s): order: %d, uuid: %s, severity: 0x%x, "
+                  "pCPU map: 0x%lx (%u vCPUs)",
+                  i, vmList->vm[i].cfg.name,
+                  vmList->vm[i].cfg.load_order,
+                  virUUIDFormat(vmList->vm[i].cfg.uuid, uuidstr),
+                  vmList->vm[i].cfg.severity,
+                  vmList->vm[i].cfg.cpu_affinity_bitmap,
+                  vmList->vm[i].cfg.vcpu_num);
+
+    ret = 0;
+
+cleanup:
+    if (fd >= 0)
+        close(fd);
+    return ret;
+}
+
+static int
+acrnSetOnlineVcpus(virDomainDefPtr def, virBitmapPtr vcpus)
+{
+    return virDomainDefSetVcpus(def, virBitmapCountBits(vcpus));
+}
+
+static int
+acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
+                         struct acrnVmEntry *entry, size_t *allocMap)
+{
+    virDomainDefPtr def;
+
+    if (!vm || !(def = vm->def))
+        return -1;
+
+    if (!def->cpumask) {
+        acrnDomainObjPrivatePtr priv = vm->privateData;
+
+        if (priv->autoCpuset)
+            virBitmapFree(priv->autoCpuset);
+        if (!(priv->autoCpuset = virBitmapNew(pi->cpu_num))) {
+            virReportError(VIR_ERR_NO_MEMORY, NULL);
+            return -1;
+        }
+
+        /* automatic vCPU placement */
+        if (acrnAllocateVcpus(pi, entry, false, def->maxvcpus, allocMap,
+                              priv->autoCpuset) < 0)
+            return -1;
+
+        if (acrnSetOnlineVcpus(def, priv->autoCpuset) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("acrnSetOnlineVcpus failed"));
+            acrnFreeVcpus(priv->autoCpuset, allocMap);
+            virBitmapFree(priv->autoCpuset);
+            priv->autoCpuset = NULL;
+            return -1;
+        }
+    } else {
+        ssize_t pos = -1;
+
+        /* clamp cpumask to cpu_num */
+        if (virBitmapShrink(def->cpumask, pi->cpu_num) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("virBitmapShrink failed"));
+            return -1;
+        }
+
+        virBitmapIntersect(def->cpumask, entry->pcpus);
+
+        /* XXX cpumask is not taken into account when allocating a VM */
+        if (virBitmapIsAllClear(def->cpumask)) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                           _("vm(%s) does not allow the given cpumask"),
+                           entry->cfg.name);
+            return -1;
+        }
+
+        if (acrnSetOnlineVcpus(def, def->cpumask) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("acrnSetOnlineVcpus failed"));
+            return -1;
+        }
+
+        /* successful - update allocation map */
+        while ((pos = virBitmapNextSetBit(def->cpumask, pos)) >= 0) {
+            allocMap[pos] += 1;
+
+            VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
+                      pos, allocMap[pos],
+                      (allocMap[pos] > 1) ? "s" : "");
+        }
+    }
+
+    return 0;
 }
 
 static int
@@ -534,21 +924,27 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     virCommandPtr cmd;
     acrnDomainObjPrivatePtr priv;
     struct acrnCmdDeviceData data = { 0 };
+    char *pcpus;
     char uuidstr[VIR_UUID_STRING_BUFLEN];
 
     if (!vm || !(def = vm->def))
         return NULL;
-
-    priv = vm->privateData;
 
     if (!(cmd = virCommandNew(ACRN_DM_PATH))) {
         virReportError(VIR_ERR_NO_MEMORY, NULL);
         return NULL;
     }
 
+    priv = vm->privateData;
+
     /* ACPI */
     if (def->features[VIR_DOMAIN_FEATURE_ACPI] == VIR_TRISTATE_SWITCH_ON)
         virCommandAddArg(cmd, "-A");
+
+    /* CPU */
+    pcpus = virBitmapFormat(def->cpumask ? def->cpumask : priv->autoCpuset);
+    virCommandAddArgList(cmd, "--cpu_affinity", pcpus, NULL);
+    VIR_FREE(pcpus);
 
     /* Memory */
     virCommandAddArg(cmd, "-m");
@@ -654,15 +1050,17 @@ acrnBuildStopCmd(virDomainDefPtr def)
 }
 
 static int
-acrnProcessStop(virDomainObjPtr vm, int reason)
+acrnProcessStop(virDomainObjPtr vm, int reason, size_t *allocMap)
 {
+    virDomainDefPtr def = vm->def;
     virCommandPtr cmd;
+    acrnDomainObjPrivatePtr priv = vm->privateData;
     int ret = -1;
 
-    if (!(cmd = acrnBuildStopCmd(vm->def)))
+    if (!(cmd = acrnBuildStopCmd(def)))
         goto cleanup;
 
-    VIR_DEBUG("Stopping domain '%s'", vm->def->name);
+    VIR_DEBUG("Stopping domain '%s'", def->name);
 
     if (virCommandRun(cmd, NULL) < 0)
         goto cleanup;
@@ -675,11 +1073,12 @@ acrnProcessStop(virDomainObjPtr vm, int reason)
 
     virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF, reason);
 
-    vm->def->id = -1;
+    def->id = -1;
     ret = 0;
 
 cleanup:
     virCommandFree(cmd);
+    acrnFreeVcpus(def->cpumask ? def->cpumask : priv->autoCpuset, allocMap);
     return ret;
 }
 
@@ -739,6 +1138,8 @@ acrnDomainShutdown(virDomainPtr dom)
     virObjectEventPtr event = NULL;
     int ret = -1;
 
+    acrnDriverLock(privconn);
+
     if (!(vm = acrnDomObjFromDomain(dom)))
         goto cleanup;
 
@@ -748,7 +1149,8 @@ acrnDomainShutdown(virDomainPtr dom)
         goto cleanup;
     }
 
-    if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN) < 0)
+    if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN,
+                        privconn->vcpuAllocMap) < 0)
         goto cleanup;
 
     if (!(event = virDomainEventLifecycleNewFromObj(
@@ -762,6 +1164,7 @@ acrnDomainShutdown(virDomainPtr dom)
 cleanup:
     if (vm)
         virObjectUnlock(vm);
+    acrnDriverUnlock(privconn);
     if (event)
         virObjectEventStateQueue(privconn->domainEventState, event);
     return ret;
@@ -775,6 +1178,8 @@ acrnDomainDestroy(virDomainPtr dom)
     virDomainState state;
     virObjectEventPtr event = NULL;
     int reason, ret = -1;
+
+    acrnDriverLock(privconn);
 
     if (!(vm = acrnDomObjFromDomain(dom)))
         goto cleanup;
@@ -792,7 +1197,8 @@ acrnDomainDestroy(virDomainPtr dom)
             virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF,
                                  VIR_DOMAIN_SHUTOFF_DESTROYED);
     } else {
-        if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED) < 0)
+        if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED,
+                            privconn->vcpuAllocMap) < 0)
             goto cleanup;
     }
 
@@ -816,6 +1222,7 @@ acrnDomainDestroy(virDomainPtr dom)
 cleanup:
     if (vm)
         virObjectUnlock(vm);
+    acrnDriverUnlock(privconn);
     if (event)
         virObjectEventStateQueue(privconn->domainEventState, event);
     return ret;
@@ -871,13 +1278,13 @@ acrnDomainGetVcpus(virDomainPtr domain,
                    unsigned char *cpumaps,
                    int maplen)
 {
-    acrnConnectPtr privconn = domain->conn->privateData;
     virDomainObjPtr vm;
     virDomainDefPtr def;
+    acrnDomainObjPrivatePtr priv;
     struct timeval tv;
-    virBitmapPtr bitmap, allcpumap = NULL;
+    virBitmapPtr bitmap, cpumap = NULL;
     unsigned long long statbase;
-    int hostcpus, i, ret = -1;
+    int i, ret = -1;
     ssize_t pos;
 
     if (!(vm = acrnDomObjFromDomain(domain)))
@@ -889,7 +1296,7 @@ acrnDomainGetVcpus(virDomainPtr domain,
         goto cleanup;
     }
 
-    if (!(def = vm->def))
+    if (!(def = vm->def) || !(priv = vm->privateData))
         goto cleanup;
 
     if (gettimeofday(&tv, NULL) < 0) {
@@ -906,29 +1313,22 @@ acrnDomainGetVcpus(virDomainPtr domain,
 
     memset(info, 0, sizeof(*info) * maxinfo);
 
-    if (cpumaps)
+    if (cpumaps) {
         memset(cpumaps, 0, maxinfo * maplen);
 
-    hostcpus = VIR_NODEINFO_MAXCPUS(privconn->nodeInfo);
-
-    /*
-     * FIXME
-     *
-     * There is no way of retrieving the real vCPU map.
-     *
-     * Blindly trust the cpumask provided, and fall back to
-     * all available CPUs when it's absent.
-     */
-    if (def->cpumask) {
-        bitmap = def->cpumask;
-    } else {
-        if (!(allcpumap = virBitmapNew(hostcpus))) {
+        if (!(cpumap = virBitmapNew(maplen * CHAR_BIT))) {
             virReportError(VIR_ERR_NO_MEMORY, NULL);
             goto cleanup;
         }
+    }
 
-        virBitmapSetAll(allcpumap);
-        bitmap = allcpumap;
+    if (def->cpumask)
+        bitmap = def->cpumask;
+    else if (priv->autoCpuset)
+        bitmap = priv->autoCpuset;
+    else {
+        virReportError(VIR_ERR_INTERNAL_ERROR, _("cpumask missing"));
+        goto cleanup;
     }
 
     for (i = 0, pos = -1; i < maxinfo; i++) {
@@ -937,17 +1337,27 @@ acrnDomainGetVcpus(virDomainPtr domain,
         if (!vcpu->online)
             continue;
 
-        if (cpumaps)
-            virBitmapToDataBuf(bitmap, VIR_GET_CPUMAP(cpumaps, maplen, i),
+        if ((pos = virBitmapNextSetBit(bitmap, pos)) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("cpu missing in cpumask"));
+            goto cleanup;
+        }
+
+        if (cpumaps) {
+            virBitmapClearAll(cpumap);
+
+            if (virBitmapSetBit(cpumap, pos) < 0) {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                               _("failed to set bit %ld in cpumap"), pos);
+                goto cleanup;
+            }
+
+            virBitmapToDataBuf(cpumap, VIR_GET_CPUMAP(cpumaps, maplen, i),
                                maplen);
+        }
 
         info[i].number = i;
         info[i].state = VIR_VCPU_RUNNING;
-
-        if ((pos = virBitmapNextSetBit(bitmap, pos)) < 0 || pos >= hostcpus)
-            pos = virBitmapNextSetBit(bitmap, -1);
-        if (pos >= hostcpus)
-            pos = 0;
         info[i].cpu = pos;
 
         /* FIXME fake an increasing cpu time value */
@@ -959,7 +1369,7 @@ acrnDomainGetVcpus(virDomainPtr domain,
 cleanup:
     if (vm)
         virObjectUnlock(vm);
-    virBitmapFree(allcpumap);
+    virBitmapFree(cpumap);
     return ret;
 }
 
@@ -994,12 +1404,14 @@ acrnDomainCreateXML(virConnectPtr conn,
                     unsigned int flags)
 {
     acrnConnectPtr privconn = conn->privateData;
+    struct acrnVmList *vmList = NULL;
     acrnDomainObjPrivatePtr priv;
     virCapsPtr caps = NULL;
     virDomainDefPtr def = NULL;
     virDomainObjPtr vm = NULL;
     virObjectEventPtr event = NULL;
     virDomainPtr dom = NULL;
+    ssize_t idx;
     unsigned int parse_flags = VIR_DOMAIN_DEF_PARSE_INACTIVE;
     unsigned char hvUUID[VIR_UUID_BUFLEN];
 
@@ -1014,12 +1426,20 @@ acrnDomainCreateXML(virConnectPtr conn,
 
     if (!(def = virDomainDefParseString(xml, caps, privconn->xmlopt,
                                         NULL, parse_flags)))
-        goto cleanup;
+        goto cleanup_nolock;
+
+    if (!(vmList = acrnVmListNew()))
+        goto cleanup_nolock;
 
     acrnDriverLock(privconn);
 
-    /* get hv UUID for this vm */
-    if (acrnInitUUID(privconn->domains, hvUUID) < 0)
+    /* retrieve current platform info */
+    if (acrnGetPlatform(&privconn->pi, vmList) < 0)
+        goto cleanup;
+
+    /* get hv UUID for the allocated VM */
+    if ((idx = acrnAllocateVm(privconn->domains, vmList, false,
+                              def->maxvcpus, hvUUID)) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
@@ -1033,14 +1453,22 @@ acrnDomainCreateXML(virConnectPtr conn,
 
     def = NULL;
 
-    if (acrnProcessStart(vm) < 0)
+    if (acrnProcessPrepareDomain(vm, &privconn->pi, &vmList->vm[idx],
+                                 privconn->vcpuAllocMap) < 0)
         goto cleanup;
+
+    if (acrnProcessStart(vm) < 0) {
+        acrnFreeVcpus(vm->def->cpumask ? vm->def->cpumask : priv->autoCpuset,
+                      privconn->vcpuAllocMap);
+        goto cleanup;
+    }
 
     if (!(event = virDomainEventLifecycleNewFromObj(
                     vm,
                     VIR_DOMAIN_EVENT_STARTED,
                     VIR_DOMAIN_EVENT_STARTED_BOOTED))) {
-        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED);
+        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED,
+                        privconn->vcpuAllocMap);
         goto cleanup;
     }
 
@@ -1055,10 +1483,13 @@ cleanup:
             virObjectUnlock(vm);
     }
     acrnDriverUnlock(privconn);
+cleanup_nolock:
     virDomainDefFree(def);
     virObjectUnref(caps);
     if (event)
         virObjectEventStateQueue(privconn->domainEventState, event);
+    if (vmList)
+        acrnVmListFree(vmList);
     return dom;
 }
 
@@ -1066,12 +1497,25 @@ static int
 acrnDomainCreateWithFlags(virDomainPtr domain, unsigned int flags)
 {
     acrnConnectPtr privconn = domain->conn->privateData;
-    virDomainObjPtr vm;
+    struct acrnVmList *vmList;
+    acrnDomainObjPrivatePtr priv;
+    virDomainObjPtr vm = NULL;
     virObjectEventPtr event = NULL;
+    ssize_t idx;
     int ret = -1;
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
 
     /* VIR_DOMAIN_START_AUTODESTROY is not supported yet */
     virCheckFlags(0, -1);
+
+    if (!(vmList = acrnVmListNew()))
+        return -1;
+
+    acrnDriverLock(privconn);
+
+    /* retrieve current platform info */
+    if (acrnGetPlatform(&privconn->pi, vmList) < 0)
+        goto cleanup;
 
     if (!(vm = acrnDomObjFromDomain(domain)))
         goto cleanup;
@@ -1082,16 +1526,34 @@ acrnDomainCreateWithFlags(virDomainPtr domain, unsigned int flags)
         goto cleanup;
     }
 
-    if (acrnProcessStart(vm) < 0)
-        /* domain must be persistent */
+    priv = vm->privateData;
+
+    /* find the allocated VM */
+    if ((idx = acrnFindVm(vmList, priv->hvUUID)) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("vm(%s) not found"),
+                       virUUIDFormat(priv->hvUUID, uuidstr));
         goto cleanup;
+    }
+
+    if (acrnProcessPrepareDomain(vm, &privconn->pi, &vmList->vm[idx],
+                                 privconn->vcpuAllocMap) < 0)
+        goto cleanup;
+
+    if (acrnProcessStart(vm) < 0) {
+        /* domain must be persistent */
+        acrnFreeVcpus(vm->def->cpumask ? vm->def->cpumask : priv->autoCpuset,
+                      privconn->vcpuAllocMap);
+        goto cleanup;
+    }
 
     if (!(event = virDomainEventLifecycleNewFromObj(
                     vm,
                     VIR_DOMAIN_EVENT_STARTED,
                     VIR_DOMAIN_EVENT_STARTED_BOOTED))) {
         /* domain must be persistent */
-        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED);
+        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED,
+                        privconn->vcpuAllocMap);
         goto cleanup;
     }
 
@@ -1100,8 +1562,10 @@ acrnDomainCreateWithFlags(virDomainPtr domain, unsigned int flags)
 cleanup:
     if (vm)
         virObjectUnlock(vm);
+    acrnDriverUnlock(privconn);
     if (event)
         virObjectEventStateQueue(privconn->domainEventState, event);
+    acrnVmListFree(vmList);
     return ret;
 }
 
@@ -1116,6 +1580,7 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
                          unsigned int flags)
 {
     acrnConnectPtr privconn = conn->privateData;
+    struct acrnVmList *vmList = NULL;
     acrnDomainObjPrivatePtr priv;
     virCapsPtr caps = NULL;
     virDomainDefPtr def = NULL, oldDef = NULL;
@@ -1135,15 +1600,23 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
 
     if (!(def = virDomainDefParseString(xml, caps, privconn->xmlopt,
                                         NULL, parse_flags)))
-        goto cleanup;
+        goto cleanup_nolock;
 
     if (virXMLCheckIllegalChars("name", def->name, "\n") < 0)
-        goto cleanup;
+        goto cleanup_nolock;
+
+    if (!(vmList = acrnVmListNew()))
+        goto cleanup_nolock;
 
     acrnDriverLock(privconn);
 
-    /* get hv UUID for this vm */
-    if (acrnInitUUID(privconn->domains, hvUUID) < 0)
+    /* retrieve current platform info */
+    if (acrnGetPlatform(&privconn->pi, vmList) < 0)
+        goto cleanup;
+
+    /* get hv UUID for the allocated VM */
+    if (acrnAllocateVm(privconn->domains, vmList, false, def->maxvcpus,
+                       hvUUID) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
@@ -1183,11 +1656,14 @@ cleanup:
             virObjectUnlock(vm);
     }
     acrnDriverUnlock(privconn);
-    virDomainDefFree(def);
     virDomainDefFree(oldDef);
+cleanup_nolock:
+    virDomainDefFree(def);
     virObjectUnref(caps);
     if (event)
         virObjectEventStateQueue(privconn->domainEventState, event);
+    if (vmList)
+        acrnVmListFree(vmList);
     return dom;
 }
 
@@ -1656,43 +2132,86 @@ cleanup:
 }
 
 static int
-acrnNodeGetCPUMap(virConnectPtr conn ATTRIBUTE_UNUSED,
+acrnNodeGetCPUMap(virConnectPtr conn,
                   unsigned char **cpumap,
                   unsigned int *online,
                   unsigned int flags)
 {
+    acrnConnectPtr privconn = conn->privateData;
+    acrnPlatformInfoPtr pi = &privconn->pi;
+    struct acrnVmList *list;
     virBitmapPtr cpus = NULL;
-    int ret = -1;
-    int dummy;
+    size_t i;
+    int dummy, ret = -1;
 
     virCheckFlags(0, -1);
 
-    if (!cpumap && !online)
-        return virHostCPUGetCount();
+    if (!(list = acrnVmListNew()))
+        return -1;
+
+    if (acrnGetPlatform(pi, list) < 0)
+        goto cleanup;
 
     /*
-     * XXX
-     * We use virHostCPUGetPresentBitmap() here rather than
-     * virHostCPUGetOnlineBitmap() because offline CPUs in
-     * SOS are still available for vCPU allocation. This is,
-     * however, counterintuitive.
+     * Mark pCPUs available to the SOS (online) or UOS
+     * (present in the pcpus bitmap).
      */
-    if (!(cpus = virHostCPUGetPresentBitmap()))
+    if (!(cpus = virHostCPUGetOnlineBitmap()))
         goto cleanup;
+
+    for (i = 0; i < list->size; i++) {
+        if (list->vm[i].cfg.load_order == POST_LAUNCHED_VM) {
+            ssize_t pos = -1;
+
+            while ((pos = virBitmapNextSetBit(list->vm[i].pcpus, pos)) >= 0) {
+                if (virBitmapSetBitExpand(cpus, pos) < 0) {
+                    virReportError(VIR_ERR_INTERNAL_ERROR,
+                                   _("virBitmapSetBitExpand failed"));
+                    goto cleanup;
+                }
+            }
+        }
+    }
 
     if (cpumap && virBitmapToData(cpus, cpumap, &dummy) < 0)
         goto cleanup;
 
-    ret = virBitmapCountBits(cpus);
-
     if (online)
-        *online = ret;
+        *online = virBitmapCountBits(cpus);
+
+    ret = pi->cpu_num;
 
 cleanup:
     if (ret < 0 && cpumap && *cpumap)
         VIR_FREE(*cpumap);
     virBitmapFree(cpus);
+    acrnVmListFree(list);
     return ret;
+}
+
+static int
+acrnStateCleanup(void)
+{
+    VIR_DEBUG("ACRN state cleanup");
+
+    if (!acrn_driver)
+        return -1;
+
+    virObjectUnref(acrn_driver->hostdevMgr);
+    virObjectUnref(acrn_driver->domainEventState);
+    virObjectUnref(acrn_driver->xmlopt);
+    virObjectUnref(acrn_driver->caps);
+    virObjectUnref(acrn_driver->domains);
+    if (acrn_driver->pi.vm_configs_addr) {
+        void *p = (void *)acrn_driver->pi.vm_configs_addr;
+        VIR_FREE(p);
+    }
+    if (acrn_driver->vcpuAllocMap)
+        VIR_FREE(acrn_driver->vcpuAllocMap);
+    virMutexDestroy(&acrn_driver->lock);
+    VIR_FREE(acrn_driver);
+
+    return 0;
 }
 
 static virCapsPtr
@@ -1750,18 +2269,22 @@ error:
 }
 
 /*
- * Vacate CPUs for UOS vCPU allocation.
+ * Vacate SOS CPUs for UOS vCPU allocation.
  */
 static int
-acrnOfflineCpus(int nprocs)
+acrnOfflineCpus(int nprocs, virBitmapPtr pcpus, size_t *allocMap)
 {
-    int i, fd;
+    ssize_t i = -1;
+    int fd;
     char path[128], chr, online;
     ssize_t rc;
 
-    /* cpu0 can't be offlined */
-    for (i = 1; i < nprocs; i++) {
-        snprintf(path, sizeof(path), "%s/cpu%d/online", SYSFS_CPU_PATH, i);
+    while ((i = virBitmapNextSetBit(pcpus, i)) >= 0 && i < nprocs) {
+        /* cpu0 can't be offlined */
+        if (i == 0)
+            continue;
+
+        snprintf(path, sizeof(path), "%s/cpu%ld/online", SYSFS_CPU_PATH, i);
 
         if ((fd = open(path, O_RDWR)) < 0) {
             virReportError(VIR_ERR_OPEN_FAILED, _("%s"), path);
@@ -1800,28 +2323,94 @@ acrnOfflineCpus(int nprocs)
         }
 
         close(fd);
+
+        if (!allocMap[i]) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("vCPU allocation map error (bit %ld)"), i);
+            return -1;
+        }
+
+        allocMap[i] -= 1;
     }
 
     return 0;
 }
 
 static int
-acrnStateCleanup(void)
+acrnInitPlatform(acrnPlatformInfoPtr pi, virNodeInfoPtr nodeInfo,
+                 size_t **allocMap)
 {
-    VIR_DEBUG("ACRN state cleanup");
+    struct acrnVmList *list;
+    virBitmapPtr postLaunchedPcpus = NULL;
+    uint16_t totalCpus;
+    size_t i, *map = NULL;
+    int ret = -1;
 
-    if (!acrn_driver)
+    if (!(list = acrnVmListNew()))
         return -1;
 
-    virObjectUnref(acrn_driver->hostdevMgr);
-    virObjectUnref(acrn_driver->domainEventState);
-    virObjectUnref(acrn_driver->xmlopt);
-    virObjectUnref(acrn_driver->caps);
-    virObjectUnref(acrn_driver->domains);
-    virMutexDestroy(&acrn_driver->lock);
-    VIR_FREE(acrn_driver);
+    if (acrnGetPlatform(pi, list) < 0)
+        goto cleanup;
 
-    return 0;
+    totalCpus = pi->cpu_num;
+
+    if (!(postLaunchedPcpus = virBitmapNew(totalCpus))) {
+        virReportError(VIR_ERR_NO_MEMORY, NULL);
+        goto cleanup;
+    }
+
+    if (VIR_ALLOC_N(map, totalCpus) < 0)
+        goto cleanup;
+
+    nodeInfo->cpus = totalCpus;
+
+    /*
+     * Assume pre-launched VMs are always running.
+     *
+     * There is no way to figure out the current vCPU
+     * allocation map via platform_info. It needs to be
+     * tracked in this driver.
+     */
+    for (i = 0; i < list->size; i++) {
+        ssize_t pos = -1;
+
+        if (list->vm[i].cfg.load_order == POST_LAUNCHED_VM) {
+            /* collect all pCPUs that can be used by a UOS */
+            while ((pos = virBitmapNextSetBit(list->vm[i].pcpus, pos)) >= 0) {
+                if (virBitmapSetBit(postLaunchedPcpus, pos) < 0) {
+                    virReportError(VIR_ERR_INTERNAL_ERROR,
+                                   _("virBitmapSetBit failed"));
+                    goto cleanup;
+                }
+            }
+        } else {
+            if (list->vm[i].cfg.load_order == SOS_VM) {
+                if (!virBitmapIsBitSet(list->vm[i].pcpus, 0)) {
+                    virReportError(VIR_ERR_INTERNAL_ERROR,
+                                   _("SOS BSP is not pCPU0"));
+                    goto cleanup;
+                }
+            }
+
+            while ((pos = virBitmapNextSetBit(list->vm[i].pcpus, pos)) >= 0 &&
+                   pos < totalCpus)
+                map[pos] += 1;
+        }
+    }
+
+    if (acrnOfflineCpus(get_nprocs_conf(), postLaunchedPcpus, map) < 0)
+        goto cleanup;
+
+    *allocMap = map;
+    map = NULL;
+    ret = 0;
+
+cleanup:
+    if (map)
+        VIR_FREE(map);
+    virBitmapFree(postLaunchedPcpus);
+    acrnVmListFree(list);
+    return ret;
 }
 
 static int
@@ -1846,6 +2435,10 @@ acrnStateInitialize(bool privileged,
     if (virCapabilitiesGetNodeInfo(&acrn_driver->nodeInfo) < 0)
         goto cleanup;
 
+    if (acrnInitPlatform(&acrn_driver->pi, &acrn_driver->nodeInfo,
+                         &acrn_driver->vcpuAllocMap) < 0)
+        goto cleanup;
+
     if (!(acrn_driver->domains = virDomainObjListNew()))
         goto cleanup;
 
@@ -1867,9 +2460,6 @@ acrnStateInitialize(bool privileged,
                                        acrn_driver->caps,
                                        acrn_driver->xmlopt,
                                        NULL, NULL) < 0)
-        goto cleanup;
-
-    if (acrnOfflineCpus(get_nprocs_conf()) < 0)
         goto cleanup;
 
     return 0;
