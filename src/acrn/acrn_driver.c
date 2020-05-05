@@ -36,6 +36,7 @@
 #define ACRN_AUTOSTART_DIR      SYSCONFDIR "/libvirt/acrn/autostart"
 #define ACRN_CONFIG_DIR         SYSCONFDIR "/libvirt/acrn"
 #define ACRN_NET_GENERATED_TAP_PREFIX   "tap"
+#define ACRN_PI_VERSION         (0x100)
 
 VIR_LOG_INIT("acrn.acrn_driver");
 
@@ -363,10 +364,11 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
             goto cleanup;
         }
 
-        if (pi->version < 0x100) {
+        if (pi->version != ACRN_PI_VERSION) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("ACRN platform version too old: 0x%x"),
-                           pi->version);
+                           _("ACRN platform version mismatch: "
+                             "got 0x%x, expecting 0x%x"),
+                           pi->version, ACRN_PI_VERSION);
             goto cleanup;
         }
 
