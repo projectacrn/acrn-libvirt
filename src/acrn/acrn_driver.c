@@ -1731,6 +1731,23 @@ acrnDomainUndefine(virDomainPtr domain)
 }
 
 static int
+acrnDomainIsActive(virDomainPtr domain)
+{
+    virDomainObjPtr obj;
+    int ret = -1;
+
+    if (!(obj = acrnDomObjFromDomain(domain)))
+        goto cleanup;
+
+    ret = virDomainObjIsActive(obj);
+
+cleanup:
+    if (obj)
+        virObjectUnlock(obj);
+    return ret;
+}
+
+static int
 acrnDomainOpenConsole(virDomainPtr dom,
                       const char *dev_name,
                       virStreamPtr st,
@@ -2499,6 +2516,7 @@ static virHypervisorDriver acrnHypervisorDriver = {
     .nodeDeviceDettach = acrnNodeDeviceDettach, /* 0.0.1 */
     .nodeDeviceDetachFlags = acrnNodeDeviceDetachFlags, /* 0.0.1 */
     .nodeDeviceReAttach = acrnNodeDeviceReAttach, /* 0.0.1 */
+    .domainIsActive = acrnDomainIsActive, /* 0.0.1 */
     .connectBaselineCPU = acrnConnectBaselineCPU, /* 0.0.1 */
     .connectDomainEventRegisterAny = acrnConnectDomainEventRegisterAny, /* 0.0.1 */
     .connectDomainEventDeregisterAny = acrnConnectDomainEventDeregisterAny, /* 0.0.1 */
