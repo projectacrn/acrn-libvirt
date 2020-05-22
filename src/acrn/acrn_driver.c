@@ -61,10 +61,6 @@ struct _acrnDomainNamespaceDef {
     char **args;
 };
 
-/*
- * Since the maximum number of pCPUs is 64,
- * the maximum number of VMs is 64.
- */
 #define MAX_NUM_VMS     (64)
 
 struct acrnVmList {
@@ -139,6 +135,9 @@ acrnVmListFree(struct acrnVmList *list)
 {
     size_t i;
 
+    if (!list)
+        return;
+
     for (i = 0; i < list->size; i++)
         virBitmapFree(list->vm[i].pcpus);
     VIR_FREE(list);
@@ -162,176 +161,6 @@ static int
 acrnGetPlatformInfo(int fd, acrnPlatformInfoPtr pi)
 {
     return ioctl(fd, IC_GET_PLATFORM_INFO, pi);
-}
-
-struct acrnFindUUIDData {
-    const unsigned char *uuid;
-};
-
-static int
-acrnFindHvUUID(virDomainObjPtr vm, void *opaque)
-{
-    struct acrnFindUUIDData *data = opaque;
-    acrnDomainObjPrivatePtr priv;
-    int ret = 0;
-
-    virObjectLock(vm);
-
-    priv = vm->privateData;
-
-    if (!uuid_compare(priv->hvUUID, data->uuid))
-        ret = -1;
-
-    virObjectUnlock(vm);
-    return ret;
-}
-
-/*
- * This function must not be called with any virDomainObjPtr
- * lock held, as it can attempt to hold any such lock in doms.
- */
-static ssize_t
-acrnAllocateVm(virDomainObjListPtr doms, struct acrnVmList *vmList, bool rtvm,
-               size_t maxvcpus, unsigned char *uuid)
-{
-    enum acrn_vm_severity severity;
-    struct acrnFindUUIDData data;
-    size_t i, start;
-
-    severity = (rtvm) ? SEVERITY_RTVM : SEVERITY_STANDARD_VM;
-
-    /* determine where to begin the search, based on vcpu_num */
-    for (i = 0; i < vmList->size; i++) {
-        if (maxvcpus <= vmList->vm[i].cfg.vcpu_num)
-            break;
-    }
-
-    start = i;
-
-    /* these VMs can fit maxvcpus */
-    for (; i < vmList->size; i++) {
-        if (vmList->vm[i].cfg.load_order == POST_LAUNCHED_VM &&
-            vmList->vm[i].cfg.severity == severity) {
-            data.uuid = vmList->vm[i].cfg.uuid;
-
-            if (!virDomainObjListForEach(doms, acrnFindHvUUID, &data)) {
-                uuid_copy(uuid, vmList->vm[i].cfg.uuid);
-                return (ssize_t)i;
-            }
-        }
-    }
-
-    i = start;
-
-    /* just try to find the best VM available */
-    while (i--) {
-        if (vmList->vm[i].cfg.load_order == POST_LAUNCHED_VM &&
-            vmList->vm[i].cfg.severity == severity) {
-            data.uuid = vmList->vm[i].cfg.uuid;
-
-            if (!virDomainObjListForEach(doms, acrnFindHvUUID, &data)) {
-                uuid_copy(uuid, vmList->vm[i].cfg.uuid);
-                return (ssize_t)i;
-            }
-        }
-    }
-
-    virReportError(VIR_ERR_INTERNAL_ERROR,
-                   _("no suitable VM found (%lu vCPUs)"), maxvcpus);
-    return -1;
-}
-
-static ssize_t
-acrnFindVm(struct acrnVmList *vmList, unsigned char *uuid)
-{
-    size_t i;
-
-    for (i = 0; i < vmList->size; i++)
-        if (!uuid_compare(vmList->vm[i].cfg.uuid, uuid))
-            return (ssize_t)i;
-
-    return -1;
-}
-
-static int
-acrnAllocateVcpus(acrnPlatformInfoPtr pi, struct acrnVmEntry *vm,
-                  bool rtvm, size_t maxvcpus, size_t *allocMap,
-                  virBitmapPtr vcpus)
-{
-    ssize_t pos;
-    uint16_t totalCpus = pi->cpu_num;
-
-    while (maxvcpus--) {
-        uint16_t minAllocated = USHRT_MAX;
-        uint16_t candidate = totalCpus;
-
-        pos = -1;
-
-        /* find a pCPU that is least occupied */
-        while ((pos = virBitmapNextSetBit(vm->pcpus, pos)) >= 0 &&
-               pos < totalCpus) {
-            if (!virBitmapIsBitSet(vcpus, pos) &&
-                allocMap[pos] < minAllocated) {
-                minAllocated = allocMap[pos];
-                candidate = pos;
-            }
-        }
-
-        /* all of the pCPUs in the VM have been allocated */
-        if (candidate == totalCpus)
-            break;
-
-        VIR_DEBUG("vm(%s): minAllocated = %u, candidate = %u",
-                  vm->cfg.name, minAllocated, candidate);
-
-        if (virBitmapSetBit(vcpus, candidate) < 0 ||
-            (rtvm && minAllocated > 0)) {
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("vCPU placement failure"));
-            return -1;
-        }
-    }
-
-    pos = -1;
-
-    /* successful - update allocation map */
-    while ((pos = virBitmapNextSetBit(vcpus, pos)) >= 0) {
-        allocMap[pos] += 1;
-
-        VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
-                  pos, allocMap[pos],
-                  (allocMap[pos] > 1) ? "s" : "");
-    }
-
-    return 0;
-}
-
-static int
-acrnFreeVcpus(virBitmapPtr vcpus, size_t *allocMap)
-{
-    ssize_t pos = -1;
-    int ret = 0;
-
-    if (!vcpus || !allocMap)
-        return -1;
-
-    /* update allocation map */
-    while ((pos = virBitmapNextSetBit(vcpus, pos)) >= 0) {
-        if (allocMap[pos]) {
-            allocMap[pos] -= 1;
-
-            VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
-                      pos, allocMap[pos],
-                      (allocMap[pos] > 1) ? "s" : "");
-        } else {
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("vCPU allocation map error (bit %ld)"),
-                           pos);
-            ret = -1;
-        }
-    }
-
-    return ret;
 }
 
 static int
@@ -468,6 +297,275 @@ cleanup:
     return ret;
 }
 
+struct acrnFindUUIDData {
+    const unsigned char *uuid;
+};
+
+static int
+acrnFindHvUUID(virDomainObjPtr vm, void *opaque)
+{
+    struct acrnFindUUIDData *data = opaque;
+    acrnDomainObjPrivatePtr priv;
+    int ret = 0;
+
+    virObjectLock(vm);
+
+    priv = vm->privateData;
+
+    if (!uuid_compare(priv->hvUUID, data->uuid))
+        ret = -1;
+
+    virObjectUnlock(vm);
+    return ret;
+}
+
+/*
+ * This function must not be called with any virDomainObjPtr
+ * lock held, as it can attempt to hold any such lock in doms.
+ */
+static ssize_t
+acrnAllocateVm(virDomainObjListPtr doms, virDomainDefPtr def,
+               acrnPlatformInfoPtr pi, struct acrnVmList *vmList, bool rtvm,
+               unsigned char *uuid)
+{
+    enum acrn_vm_severity severity;
+    struct acrnFindUUIDData data;
+    virBitmapPtr cpumask = NULL, testmask = NULL;
+    ssize_t i, start, candidate = -1;
+    size_t nvcpus, maxVcpusFit = 0;
+    char *maskstr = NULL;
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
+
+    severity = (rtvm) ? SEVERITY_RTVM : SEVERITY_STANDARD_VM;
+
+    if (def->cpumask) {
+        /* prepare a sanitized cpumask */
+        if (!(cpumask = virBitmapNewCopy(def->cpumask))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("virBitmapNewCopy failed"));
+            goto notfound;
+        }
+
+        /* clamp cpumask to cpu_num */
+        if (virBitmapShrink(cpumask, pi->cpu_num) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("virBitmapShrink failed"));
+            goto notfound;
+        }
+
+        if (!(testmask = virBitmapNew(virBitmapSize(cpumask)))) {
+            virReportError(VIR_ERR_NO_MEMORY, NULL);
+            goto notfound;
+        }
+    }
+
+    /* determine where to begin the search, based on vcpu_num */
+    for (i = 0; i < vmList->size; i++) {
+        if (def->maxvcpus <= vmList->vm[i].cfg.vcpu_num)
+            break;
+    }
+
+    start = i;
+
+    /* these VMs can fit maxvcpus */
+    for (; i < vmList->size; i++) {
+        if (vmList->vm[i].cfg.load_order == POST_LAUNCHED_VM &&
+            vmList->vm[i].cfg.severity == severity) {
+            data.uuid = vmList->vm[i].cfg.uuid;
+
+            if (!virDomainObjListForEach(doms, acrnFindHvUUID, &data)) {
+                if (!cpumask)
+                    goto done;
+
+                if (virBitmapCopy(testmask, cpumask) < 0) {
+                    virReportError(VIR_ERR_INTERNAL_ERROR,
+                                   _("virBitmapCopy failed"));
+                    goto notfound;
+                }
+
+                virBitmapIntersect(testmask, vmList->vm[i].pcpus);
+                nvcpus = virBitmapCountBits(testmask);
+
+                if (nvcpus >= def->maxvcpus)
+                    goto done;
+
+                /* search for max fit */
+                if (nvcpus > maxVcpusFit) {
+                    maxVcpusFit = nvcpus;
+                    candidate = i;
+                }
+            }
+        }
+    }
+
+    i = start;
+
+    /* just try to find the best VM available */
+    while (i--) {
+        if (vmList->vm[i].cfg.load_order == POST_LAUNCHED_VM &&
+            vmList->vm[i].cfg.severity == severity) {
+            data.uuid = vmList->vm[i].cfg.uuid;
+
+            if (!virDomainObjListForEach(doms, acrnFindHvUUID, &data)) {
+                if (!cpumask)
+                    goto done;
+
+                if (virBitmapCopy(testmask, cpumask) < 0) {
+                    virReportError(VIR_ERR_INTERNAL_ERROR,
+                                   _("virBitmapCopy failed"));
+                    goto notfound;
+                }
+
+                virBitmapIntersect(testmask, vmList->vm[i].pcpus);
+                nvcpus = virBitmapCountBits(testmask);
+
+                /* search for max fit */
+                if (nvcpus >= maxVcpusFit) {
+                    maxVcpusFit = nvcpus;
+                    candidate = i;
+                }
+            }
+        }
+    }
+
+    if (maxVcpusFit > 0) {
+        /* max fit found */
+        i = candidate;
+        if (virBitmapCopy(testmask, cpumask) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                    _("virBitmapCopy failed"));
+            goto notfound;
+        }
+        virBitmapIntersect(testmask, vmList->vm[i].pcpus);
+        goto done;
+    }
+
+notfound:
+    i = -1;
+
+    if (def->cpumask)
+        maskstr = virBitmapFormat(def->cpumask);
+
+    virReportError(VIR_ERR_INTERNAL_ERROR,
+                   _("no suitable vm found (%lu max vcpus, cpumask = %s)"),
+                   def->maxvcpus,
+                   maskstr ? maskstr : "auto");
+
+done:
+    if (i >= 0) {
+        if (testmask)
+            maskstr = virBitmapFormat(testmask);
+        else
+            maskstr = virBitmapFormat(vmList->vm[i].pcpus);
+
+        VIR_DEBUG("vm(%s) allocated: uuid = %s, "
+                  "%lu max vcpus, %s cpumask = %s",
+                  vmList->vm[i].cfg.name,
+                  virUUIDFormat(vmList->vm[i].cfg.uuid, uuidstr),
+                  def->maxvcpus,
+                  testmask ? "allowed" : "auto",
+                  maskstr ? maskstr : "n/a");
+        uuid_copy(uuid, vmList->vm[i].cfg.uuid);
+    }
+    virBitmapFree(cpumask);
+    virBitmapFree(testmask);
+    if (maskstr)
+        VIR_FREE(maskstr);
+    return i;
+}
+
+static ssize_t
+acrnFindVm(struct acrnVmList *vmList, unsigned char *uuid)
+{
+    size_t i;
+
+    for (i = 0; i < vmList->size; i++)
+        if (!uuid_compare(vmList->vm[i].cfg.uuid, uuid))
+            return (ssize_t)i;
+
+    return -1;
+}
+
+static int
+acrnAllocateVcpus(acrnPlatformInfoPtr pi, virBitmapPtr pcpus, bool rtvm,
+                  size_t maxvcpus, size_t *allocMap, virBitmapPtr vcpus)
+{
+    ssize_t pos;
+    uint16_t totalCpus = pi->cpu_num;
+
+    while (maxvcpus--) {
+        uint16_t minAllocated = USHRT_MAX;
+        uint16_t candidate = totalCpus;
+
+        pos = -1;
+
+        /* find a pCPU that is least occupied */
+        while ((pos = virBitmapNextSetBit(pcpus, pos)) >= 0 &&
+               pos < totalCpus) {
+            if (!virBitmapIsBitSet(vcpus, pos) &&
+                allocMap[pos] < minAllocated) {
+                minAllocated = allocMap[pos];
+                candidate = pos;
+            }
+        }
+
+        /* all of the pCPUs in the VM have been allocated */
+        if (candidate == totalCpus)
+            break;
+
+        VIR_DEBUG("minAllocated = %u, candidate = %u",
+                  minAllocated, candidate);
+
+        if (virBitmapSetBit(vcpus, candidate) < 0 ||
+            (rtvm && minAllocated > 0)) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("vCPU placement failure"));
+            return -1;
+        }
+    }
+
+    pos = -1;
+
+    /* successful - update allocation map */
+    while ((pos = virBitmapNextSetBit(vcpus, pos)) >= 0) {
+        allocMap[pos] += 1;
+
+        VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
+                  pos, allocMap[pos],
+                  (allocMap[pos] > 1) ? "s" : "");
+    }
+
+    return 0;
+}
+
+static int
+acrnFreeVcpus(virBitmapPtr vcpus, size_t *allocMap)
+{
+    ssize_t pos = -1;
+    int ret = 0;
+
+    if (!vcpus || !allocMap)
+        return -1;
+
+    /* update allocation map */
+    while ((pos = virBitmapNextSetBit(vcpus, pos)) >= 0) {
+        if (allocMap[pos]) {
+            allocMap[pos] -= 1;
+
+            VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
+                      pos, allocMap[pos],
+                      (allocMap[pos] > 1) ? "s" : "");
+        } else {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("vCPU allocation map error (bit %ld)"),
+                           pos);
+            ret = -1;
+        }
+    }
+
+    return ret;
+}
+
 static int
 acrnSetOnlineVcpus(virDomainDefPtr def, virBitmapPtr vcpus)
 {
@@ -479,70 +577,69 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
                          struct acrnVmEntry *entry, size_t *allocMap)
 {
     virDomainDefPtr def;
+    virBitmapPtr allowedmask = NULL;
+    acrnDomainObjPrivatePtr priv;
+    int ret = -1;
 
     if (!vm || !(def = vm->def))
         return -1;
 
-    if (!def->cpumask) {
-        acrnDomainObjPrivatePtr priv = vm->privateData;
+    priv = vm->privateData;
 
-        if (priv->autoCpuset)
-            virBitmapFree(priv->autoCpuset);
-        if (!(priv->autoCpuset = virBitmapNew(pi->cpu_num))) {
-            virReportError(VIR_ERR_NO_MEMORY, NULL);
-            return -1;
-        }
-
-        /* automatic vCPU placement */
-        if (acrnAllocateVcpus(pi, entry, false, def->maxvcpus, allocMap,
-                              priv->autoCpuset) < 0)
-            return -1;
-
-        if (acrnSetOnlineVcpus(def, priv->autoCpuset) < 0) {
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("acrnSetOnlineVcpus failed"));
-            acrnFreeVcpus(priv->autoCpuset, allocMap);
-            virBitmapFree(priv->autoCpuset);
-            priv->autoCpuset = NULL;
-            return -1;
-        }
-    } else {
-        ssize_t pos = -1;
-
+    if (def->cpumask) {
         /* clamp cpumask to cpu_num */
         if (virBitmapShrink(def->cpumask, pi->cpu_num) < 0) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            _("virBitmapShrink failed"));
-            return -1;
+            goto cleanup;
         }
 
-        virBitmapIntersect(def->cpumask, entry->pcpus);
+        if (!(allowedmask = virBitmapNewCopy(def->cpumask))) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("virBitmapNewCopy failed"));
+            goto cleanup;
+        }
 
-        /* XXX cpumask is not taken into account when allocating a VM */
-        if (virBitmapIsAllClear(def->cpumask)) {
+        virBitmapIntersect(allowedmask, entry->pcpus);
+
+        if (virBitmapIsAllClear(allowedmask)) {
             virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
                            _("vm(%s) does not allow the given cpumask"),
                            entry->cfg.name);
-            return -1;
-        }
-
-        if (acrnSetOnlineVcpus(def, def->cpumask) < 0) {
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("acrnSetOnlineVcpus failed"));
-            return -1;
-        }
-
-        /* successful - update allocation map */
-        while ((pos = virBitmapNextSetBit(def->cpumask, pos)) >= 0) {
-            allocMap[pos] += 1;
-
-            VIR_DEBUG("pCPU[%ld]: %lu vCPU%s allocated",
-                      pos, allocMap[pos],
-                      (allocMap[pos] > 1) ? "s" : "");
+            goto cleanup;
         }
     }
 
-    return 0;
+    if (priv->cpuAffinitySet)
+        virBitmapFree(priv->cpuAffinitySet);
+    if (!(priv->cpuAffinitySet = virBitmapNew(pi->cpu_num))) {
+        virReportError(VIR_ERR_NO_MEMORY, NULL);
+        goto cleanup;
+    }
+
+    /* vCPU placement */
+    if (acrnAllocateVcpus(pi,
+                          allowedmask ? allowedmask : entry->pcpus,
+                          false, def->maxvcpus, allocMap,
+                          priv->cpuAffinitySet) < 0)
+        goto cleanup;
+
+    if (acrnSetOnlineVcpus(def, priv->cpuAffinitySet) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("acrnSetOnlineVcpus failed"));
+        acrnFreeVcpus(priv->cpuAffinitySet, allocMap);
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    if (ret < 0 && priv->cpuAffinitySet) {
+        virBitmapFree(priv->cpuAffinitySet);
+        priv->cpuAffinitySet = NULL;
+    }
+    virBitmapFree(allowedmask);
+    return ret;
 }
 
 static int
@@ -944,7 +1041,7 @@ acrnBuildStartCmd(virDomainObjPtr vm)
         virCommandAddArg(cmd, "-A");
 
     /* CPU */
-    pcpus = virBitmapFormat(def->cpumask ? def->cpumask : priv->autoCpuset);
+    pcpus = virBitmapFormat(priv->cpuAffinitySet);
     virCommandAddArgList(cmd, "--cpu_affinity", pcpus, NULL);
     VIR_FREE(pcpus);
 
@@ -1080,7 +1177,7 @@ acrnProcessStop(virDomainObjPtr vm, int reason, size_t *allocMap)
 
 cleanup:
     virCommandFree(cmd);
-    acrnFreeVcpus(def->cpumask ? def->cpumask : priv->autoCpuset, allocMap);
+    acrnFreeVcpus(priv->cpuAffinitySet, allocMap);
     return ret;
 }
 
@@ -1284,7 +1381,7 @@ acrnDomainGetVcpus(virDomainPtr domain,
     virDomainDefPtr def;
     acrnDomainObjPrivatePtr priv;
     struct timeval tv;
-    virBitmapPtr bitmap, cpumap = NULL;
+    virBitmapPtr cpumap = NULL;
     unsigned long long statbase;
     int i, ret = -1;
     ssize_t pos;
@@ -1324,11 +1421,7 @@ acrnDomainGetVcpus(virDomainPtr domain,
         }
     }
 
-    if (def->cpumask)
-        bitmap = def->cpumask;
-    else if (priv->autoCpuset)
-        bitmap = priv->autoCpuset;
-    else {
+    if (!priv->cpuAffinitySet) {
         virReportError(VIR_ERR_INTERNAL_ERROR, _("cpumask missing"));
         goto cleanup;
     }
@@ -1339,7 +1432,7 @@ acrnDomainGetVcpus(virDomainPtr domain,
         if (!vcpu->online)
             continue;
 
-        if ((pos = virBitmapNextSetBit(bitmap, pos)) < 0) {
+        if ((pos = virBitmapNextSetBit(priv->cpuAffinitySet, pos)) < 0) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            _("cpu missing in cpumask"));
             goto cleanup;
@@ -1440,8 +1533,8 @@ acrnDomainCreateXML(virConnectPtr conn,
         goto cleanup;
 
     /* get hv UUID for the allocated VM */
-    if ((idx = acrnAllocateVm(privconn->domains, vmList, false,
-                              def->maxvcpus, hvUUID)) < 0)
+    if ((idx = acrnAllocateVm(privconn->domains, def, &privconn->pi, vmList,
+                              false, hvUUID)) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
@@ -1460,8 +1553,7 @@ acrnDomainCreateXML(virConnectPtr conn,
         goto cleanup;
 
     if (acrnProcessStart(vm) < 0) {
-        acrnFreeVcpus(vm->def->cpumask ? vm->def->cpumask : priv->autoCpuset,
-                      privconn->vcpuAllocMap);
+        acrnFreeVcpus(priv->cpuAffinitySet, privconn->vcpuAllocMap);
         goto cleanup;
     }
 
@@ -1544,8 +1636,7 @@ acrnDomainCreateWithFlags(virDomainPtr domain, unsigned int flags)
 
     if (acrnProcessStart(vm) < 0) {
         /* domain must be persistent */
-        acrnFreeVcpus(vm->def->cpumask ? vm->def->cpumask : priv->autoCpuset,
-                      privconn->vcpuAllocMap);
+        acrnFreeVcpus(priv->cpuAffinitySet, privconn->vcpuAllocMap);
         goto cleanup;
     }
 
@@ -1617,8 +1708,8 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
         goto cleanup;
 
     /* get hv UUID for the allocated VM */
-    if (acrnAllocateVm(privconn->domains, vmList, false, def->maxvcpus,
-                       hvUUID) < 0)
+    if (acrnAllocateVm(privconn->domains, def, &privconn->pi, vmList,
+                       false, hvUUID) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,

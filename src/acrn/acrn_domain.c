@@ -334,7 +334,7 @@ acrnDomainObjPrivateFree(void *data)
     acrnDomainObjPrivatePtr priv = data;
 
     acrnDomainTtyCleanup(priv);
-    virBitmapFree(priv->autoCpuset);
+    virBitmapFree(priv->cpuAffinitySet);
     VIR_FREE(priv);
 }
 

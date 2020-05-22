@@ -7,7 +7,7 @@ typedef struct _acrnDomainObjPrivate acrnDomainObjPrivate;
 typedef acrnDomainObjPrivate *acrnDomainObjPrivatePtr;
 struct _acrnDomainObjPrivate {
     unsigned char hvUUID[VIR_UUID_BUFLEN];
-    virBitmapPtr autoCpuset;
+    virBitmapPtr cpuAffinitySet;
     struct {
         int fd;
         char *slave;
