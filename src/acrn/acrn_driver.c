@@ -4,6 +4,7 @@
 #include <sys/ioctl.h>
 #include <uuid/uuid.h>
 #include <libxml/xpathInternals.h>
+#include "count-one-bits.h"
 #include "configmake.h"
 #include "datatypes.h"
 #include "node_device_conf.h"
@@ -66,6 +67,7 @@ struct _acrnDomainNamespaceDef {
 struct acrnVmList {
     struct acrnVmEntry {
         acrnVmCfg cfg;
+        int vcpu_num;
         virBitmapPtr pcpus;
     } vm[MAX_NUM_VMS];
     size_t size;
@@ -167,7 +169,7 @@ static int
 acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
 {
     acrnVmCfgPtr vmcfg;
-    int fd, pos, ret = -1;
+    int fd, vcpu_num, pos, ret = -1;
     uint8_t *p;
     uint16_t i, j;
     uint64_t pcpus;
@@ -229,21 +231,17 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
                 goto cleanup;
             }
 
-            if (!vmcfg->vcpu_num) {
-                virReportError(VIR_ERR_INTERNAL_ERROR,
-                               _("no vCPU in vm[%u]"), i);
-                goto cleanup;
-            }
-
-            if (!(pcpus = vmcfg->cpu_affinity_bitmap)) {
+            if (!(pcpus = vmcfg->cpu_affinity)) {
                 virReportError(VIR_ERR_INTERNAL_ERROR,
                                _("no pCPU in vm[%u]"), i);
                 goto cleanup;
             }
 
+            vcpu_num = count_one_bits_l(pcpus);
+
             /* insertion sort based on vcpu_num */
             for (j = 0; j < vmList->size; j++) {
-                if (vmcfg->vcpu_num < vmList->vm[j].cfg.vcpu_num)
+                if (vcpu_num < vmList->vm[j].vcpu_num)
                     break;
             }
 
@@ -256,13 +254,13 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
 
             if (!(vmList->vm[j].pcpus =
                         virBitmapNew(
-                            sizeof(vmcfg->cpu_affinity_bitmap) * CHAR_BIT))) {
+                            sizeof(vmcfg->cpu_affinity) * CHAR_BIT))) {
                 virReportError(VIR_ERR_NO_MEMORY, NULL);
                 goto cleanup;
             }
 
-            /* convert cpu_affinity_bitmap to virBitmap */
-            while ((pos = ffsll(pcpus)) > 0) {
+            /* convert cpu_affinity to virBitmap */
+            while ((pos = ffsl(pcpus)) > 0) {
                 pos--;
 
                 if (virBitmapSetBit(vmList->vm[j].pcpus, pos) < 0) {
@@ -273,6 +271,7 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
                 pcpus &= ~(1ULL << pos);
             }
 
+            vmList->vm[j].vcpu_num = vcpu_num;
             vmList->size++;
         }
 
@@ -281,13 +280,13 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
 
     for (i = 0; i < vmList->size; i++)
         VIR_DEBUG("vm[%u] (%s): order: %d, uuid: %s, severity: 0x%x, "
-                  "pCPU map: 0x%lx (%u vCPUs)",
+                  "pCPU map: 0x%lx (%d vCPUs)",
                   i, vmList->vm[i].cfg.name,
                   vmList->vm[i].cfg.load_order,
                   virUUIDFormat(vmList->vm[i].cfg.uuid, uuidstr),
                   vmList->vm[i].cfg.severity,
-                  vmList->vm[i].cfg.cpu_affinity_bitmap,
-                  vmList->vm[i].cfg.vcpu_num);
+                  vmList->vm[i].cfg.cpu_affinity,
+                  vmList->vm[i].vcpu_num);
 
     ret = 0;
 
@@ -361,7 +360,7 @@ acrnAllocateVm(virDomainObjListPtr doms, virDomainDefPtr def,
 
     /* determine where to begin the search, based on vcpu_num */
     for (i = 0; i < vmList->size; i++) {
-        if (def->maxvcpus <= vmList->vm[i].cfg.vcpu_num)
+        if (def->maxvcpus <= vmList->vm[i].vcpu_num)
             break;
     }
 
