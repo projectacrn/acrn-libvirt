@@ -1822,6 +1822,40 @@ acrnDomainUndefine(virDomainPtr domain)
 }
 
 static int
+acrnDomainMemoryStats(virDomainPtr dom,
+                      virDomainMemoryStatPtr stats,
+                      unsigned int nr_stats,
+                      unsigned int flags)
+{
+    virDomainObjPtr vm;
+    int ret = -1;
+
+    virCheckFlags(0, -1);
+
+    if (!(vm = acrnDomObjFromDomain(dom)))
+        goto cleanup;
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+                       _("domain is not active"));
+        goto cleanup;
+    }
+
+    ret = 0;
+
+    if (ret < nr_stats) {
+        stats[ret].tag = VIR_DOMAIN_MEMORY_STAT_RSS;
+        stats[ret].val = virDomainDefGetMemoryInitial(vm->def);
+        ret++;
+    }
+
+cleanup:
+    if (vm)
+        virObjectUnlock(vm);
+    return ret;
+}
+
+static int
 acrnDomainIsActive(virDomainPtr domain)
 {
     virDomainObjPtr obj;
@@ -2604,6 +2638,7 @@ static virHypervisorDriver acrnHypervisorDriver = {
     .domainDefineXMLFlags = acrnDomainDefineXMLFlags, /* 0.0.1 */
     .domainUndefine = acrnDomainUndefine, /* 0.0.1 */
     .domainUndefineFlags = acrnDomainUndefineFlags, /* 0.0.1 */
+    .domainMemoryStats = acrnDomainMemoryStats, /* 0.0.1 */
     .nodeDeviceDettach = acrnNodeDeviceDettach, /* 0.0.1 */
     .nodeDeviceDetachFlags = acrnNodeDeviceDetachFlags, /* 0.0.1 */
     .nodeDeviceReAttach = acrnNodeDeviceReAttach, /* 0.0.1 */
