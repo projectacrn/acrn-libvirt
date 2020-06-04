@@ -219,6 +219,7 @@
         <value>phyp</value> <!-- NOT USED ANYMORE -->
         <value>vz</value>
         <value>bhyve</value>
+        <value>acrn</value>
       </choice>
     </attribute>
   </define>
