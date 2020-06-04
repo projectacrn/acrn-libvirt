@@ -1712,6 +1712,9 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
                        false, hvUUID) < 0)
         goto cleanup;
 
+    /* update uuid to hvUUID */
+    uuid_copy(def->uuid, hvUUID);
+
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
                                    privconn->xmlopt,
                                    0, &oldDef)))
