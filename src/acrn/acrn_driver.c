@@ -2675,12 +2675,14 @@ cleanup:
     return ret;
 }
 
-static int
+static virDrvStateInitResult
 acrnStateInitialize(bool privileged,
                     const char *root,
                     virStateInhibitCallback callback G_GNUC_UNUSED,
                     void *opaque G_GNUC_UNUSED)
 {
+    int ret;
+
     if (root) {
         virReportError(VIR_ERR_INVALID_ARG, "%s",
                        _("Driver does not support embedded mode"));
@@ -2704,8 +2706,15 @@ acrnStateInitialize(bool privileged,
     if (virCapabilitiesGetNodeInfo(&acrn_driver->nodeInfo) < 0)
         goto cleanup;
 
-    if (acrnInitPlatform(&acrn_driver->pi, &acrn_driver->nodeInfo,
-                         &acrn_driver->vcpuAllocMap) < 0)
+    ret = acrnInitPlatform(&acrn_driver->pi, &acrn_driver->nodeInfo,
+                           &acrn_driver->vcpuAllocMap);
+    if (ret == -ENODEV) {
+        /* we are not running on an ACRN enabled system */
+        VIR_INFO("ACRN hypervisor not available, disabling driver");
+        ret = VIR_DRV_STATE_INIT_SKIPPED;
+        goto cleanup_nofail;
+    }
+    if (ret < 0)
         goto cleanup;
 
     if (!(acrn_driver->domains = virDomainObjListNew()))
@@ -2733,8 +2742,10 @@ acrnStateInitialize(bool privileged,
     return VIR_DRV_STATE_INIT_COMPLETE;
 
 cleanup:
+    ret = VIR_DRV_STATE_INIT_ERROR;
+cleanup_nofail:
     acrnStateCleanup();
-    return VIR_DRV_STATE_INIT_ERROR;
+    return ret;
 }
 
 static virHypervisorDriver acrnHypervisorDriver = {
