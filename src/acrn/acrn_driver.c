@@ -169,7 +169,7 @@ static int
 acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
 {
     acrnVmCfgPtr vmcfg;
-    int fd, vcpu_num, pos, ret = -1;
+    int fd, vcpu_num, pos, ret;
     uint8_t *p;
     uint16_t i, j;
     uint64_t pcpus;
@@ -181,8 +181,7 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
     vmList->size = 0;
 
     if ((fd = acrnGetVhmFd()) < 0) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("acrnGetVhmFd failed"));
+        ret = -ENODEV;
         goto cleanup;
     }
 
@@ -192,6 +191,7 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
             !pi->cpu_num || !pi->max_vms || !pi->vm_config_entry_size) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            _("acrnGetPlatformInfo failed"));
+            ret = -EINVAL;
             goto cleanup;
         }
 
@@ -200,6 +200,7 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
                            _("ACRN platform version mismatch: "
                              "got 0x%x, expecting 0x%x"),
                            pi->version, ACRN_PI_VERSION);
+            ret = -EOPNOTSUPP;
             goto cleanup;
         }
 
@@ -207,12 +208,14 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
                                                 pi->max_vms,
                                                 pi->vm_config_entry_size))) {
             virReportError(VIR_ERR_NO_MEMORY, NULL);
+            ret = -ENOMEM;
             goto cleanup;
         }
     }
 
     /* now get vm config */
-    if (acrnGetPlatformInfo(fd, pi) < 0) {
+    ret = acrnGetPlatformInfo(fd, pi);
+    if (ret < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("acrnGetPlatformInfo failed"));
         goto cleanup;
@@ -228,12 +231,14 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
                 virReportError(VIR_ERR_INTERNAL_ERROR,
                                _("only %lu VMs are supported"),
                                ARRAY_CARDINALITY(vmList->vm));
+                ret = -EINVAL;
                 goto cleanup;
             }
 
             if (!(pcpus = vmcfg->cpu_affinity)) {
                 virReportError(VIR_ERR_INTERNAL_ERROR,
                                _("no pCPU in vm[%u]"), i);
+                ret = -EINVAL;
                 goto cleanup;
             }
 
@@ -256,6 +261,7 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
                         virBitmapNew(
                             sizeof(vmcfg->cpu_affinity) * CHAR_BIT))) {
                 virReportError(VIR_ERR_NO_MEMORY, NULL);
+                ret = -ENOMEM;
                 goto cleanup;
             }
 
@@ -266,6 +272,7 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
                 if (virBitmapSetBit(vmList->vm[j].pcpus, pos) < 0) {
                     virReportError(VIR_ERR_INTERNAL_ERROR,
                                    _("virBitmapSetBit failed"));
+                    ret = -EINVAL;
                     goto cleanup;
                 }
                 pcpus &= ~(1ULL << pos);
