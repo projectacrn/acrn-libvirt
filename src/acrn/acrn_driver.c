@@ -2637,23 +2637,27 @@ acrnInitPlatform(acrnPlatformInfoPtr pi, virNodeInfoPtr nodeInfo,
     virBitmapPtr postLaunchedPcpus = NULL;
     uint16_t totalCpus;
     size_t i, *map = NULL;
-    int ret = -1;
+    int ret;
 
     if (!(list = acrnVmListNew()))
-        return -1;
+        return -ENOMEM;
 
-    if (acrnGetPlatform(pi, list) < 0)
+    ret = acrnGetPlatform(pi, list);
+    if (ret < 0)
         goto cleanup;
 
     totalCpus = pi->cpu_num;
 
     if (!(postLaunchedPcpus = virBitmapNew(totalCpus))) {
         virReportError(VIR_ERR_NO_MEMORY, NULL);
+        ret = -ENOMEM;
         goto cleanup;
     }
 
-    if (VIR_ALLOC_N(map, totalCpus) < 0)
+    if (VIR_ALLOC_N(map, totalCpus) < 0) {
+        ret = -ENOMEM;
         goto cleanup;
+    }
 
     nodeInfo->cpus = totalCpus;
 
@@ -2673,6 +2677,7 @@ acrnInitPlatform(acrnPlatformInfoPtr pi, virNodeInfoPtr nodeInfo,
                 if (virBitmapSetBit(postLaunchedPcpus, pos) < 0) {
                     virReportError(VIR_ERR_INTERNAL_ERROR,
                                    _("virBitmapSetBit failed"));
+                    ret = -EINVAL;
                     goto cleanup;
                 }
             }
@@ -2681,6 +2686,7 @@ acrnInitPlatform(acrnPlatformInfoPtr pi, virNodeInfoPtr nodeInfo,
                 if (!virBitmapIsBitSet(list->vm[i].pcpus, 0)) {
                     virReportError(VIR_ERR_INTERNAL_ERROR,
                                    _("SOS BSP is not pCPU0"));
+                    ret = -EINVAL;
                     goto cleanup;
                 }
             }
@@ -2691,8 +2697,10 @@ acrnInitPlatform(acrnPlatformInfoPtr pi, virNodeInfoPtr nodeInfo,
         }
     }
 
-    if (acrnOfflineCpus(get_nprocs_conf(), postLaunchedPcpus, map) < 0)
+    if (acrnOfflineCpus(get_nprocs_conf(), postLaunchedPcpus, map) < 0) {
+        ret = -EIO;
         goto cleanup;
+    }
 
     *allocMap = map;
     map = NULL;
