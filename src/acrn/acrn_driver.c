@@ -2698,6 +2698,36 @@ cleanup:
     return ret;
 }
 
+static int
+acrnPersistentDomainInit(virDomainObjPtr dom, void *opaque)
+{
+    unsigned char hvUUID[VIR_UUID_BUFLEN];
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
+
+    struct acrnVmList *vmList = opaque;
+    acrnDomainObjPrivatePtr priv = dom->privateData;
+    virObjectEventPtr event = NULL;
+
+    if (acrnAllocateVm(acrn_driver->domains, dom->def, &acrn_driver->pi, vmList,
+                       hvUUID) < 0)
+        return -1;
+
+    VIR_DEBUG("Adding ACRN %sdomain %s (%s)",
+              acrnIsRtvm(dom->def) ? "RT " : "",
+              virUUIDFormat(hvUUID, uuidstr), dom->def->name);
+
+    uuid_copy(priv->hvUUID, hvUUID);
+
+    event = virDomainEventLifecycleNewFromObj(dom,
+                                              VIR_DOMAIN_EVENT_DEFINED,
+                                              VIR_DOMAIN_EVENT_DEFINED_ADDED);
+    if (!event)
+        return -1;
+
+    virObjectEventStateQueue(acrn_driver->domainEventState, event);
+    return 0;
+}
+
 static virDrvStateInitResult
 acrnStateInitialize(bool privileged,
                     const char *root,
@@ -2705,6 +2735,7 @@ acrnStateInitialize(bool privileged,
                     void *opaque G_GNUC_UNUSED)
 {
     int ret;
+    struct acrnVmList *list = NULL;
 
     if (root) {
         virReportError(VIR_ERR_INVALID_ARG, "%s",
@@ -2755,6 +2786,7 @@ acrnStateInitialize(bool privileged,
     if (!(acrn_driver->hostdevMgr = virHostdevManagerGetDefault()))
         goto cleanup;
 
+    /* load inactive persistent configs */
     if (virDomainObjListLoadAllConfigs(acrn_driver->domains,
                                        ACRN_CONFIG_DIR,
                                        ACRN_AUTOSTART_DIR, false,
@@ -2762,12 +2794,25 @@ acrnStateInitialize(bool privileged,
                                        NULL, NULL) < 0)
         goto cleanup;
 
+    list = acrnVmListNew();
+    if (!list)
+        goto cleanup;
+
+    if (acrnGetPlatform(&acrn_driver->pi, list) < 0)
+        goto cleanup;
+
+    if (virDomainObjListForEach(acrn_driver->domains, false,
+                                acrnPersistentDomainInit, list) < 0)
+        goto cleanup;
+
+    acrnVmListFree(list);
     return VIR_DRV_STATE_INIT_COMPLETE;
 
 cleanup:
     ret = VIR_DRV_STATE_INIT_ERROR;
 cleanup_nofail:
     acrnStateCleanup();
+    acrnVmListFree(list);
     return ret;
 }
 
