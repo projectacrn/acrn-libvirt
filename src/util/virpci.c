@@ -52,6 +52,7 @@ VIR_ENUM_IMPL(virPCIStubDriver,
               VIR_PCI_STUB_DRIVER_LAST,
               "none",
               "pciback", /* XEN */
+              "pci-stub", /* KVM */
               "vfio-pci", /* VFIO */
 );
 

@@ -243,16 +243,12 @@ virHostdevGetPCIHostDevice(const virDomainHostdevDef *hostdev,
 
     virPCIDeviceSetManaged(actual, hostdev->managed);
 
-    if (pcisrc->backend == VIR_DOMAIN_HOSTDEV_PCI_BACKEND_VFIO) {
+    if (pcisrc->backend == VIR_DOMAIN_HOSTDEV_PCI_BACKEND_VFIO)
         virPCIDeviceSetStubDriver(actual, VIR_PCI_STUB_DRIVER_VFIO);
-    } else if (pcisrc->backend == VIR_DOMAIN_HOSTDEV_PCI_BACKEND_XEN) {
+    else if (pcisrc->backend == VIR_DOMAIN_HOSTDEV_PCI_BACKEND_XEN)
         virPCIDeviceSetStubDriver(actual, VIR_PCI_STUB_DRIVER_XEN);
-    } else {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                       _("pci backend driver '%s' is not supported"),
-                       virDomainHostdevSubsysPCIBackendTypeToString(pcisrc->backend));
-        return -1;
-    }
+    else
+        virPCIDeviceSetStubDriver(actual, VIR_PCI_STUB_DRIVER_KVM);
 
     *pci = g_steal_pointer(&actual);
     return 0;
