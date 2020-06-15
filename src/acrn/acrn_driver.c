@@ -1397,14 +1397,6 @@ acrnDomainGetVcpus(virDomainPtr domain,
     if (!(def = vm->def) || !(priv = vm->privateData))
         goto cleanup;
 
-    if (gettimeofday(&tv, NULL) < 0) {
-        virReportSystemError(errno,
-                             "%s", _("getting time of day"));
-        goto cleanup;
-    }
-
-    statbase = (tv.tv_sec * 1000UL * 1000UL) + tv.tv_usec;
-
     /* clamp to actual number of vcpus */
     if (maxinfo > virDomainDefGetVcpus(vm->def))
         maxinfo = virDomainDefGetVcpus(vm->def);
@@ -1424,6 +1416,15 @@ acrnDomainGetVcpus(virDomainPtr domain,
         virReportError(VIR_ERR_INTERNAL_ERROR, _("cpumask missing"));
         goto cleanup;
     }
+
+    if (gettimeofday(&tv, NULL) < 0) {
+        virReportSystemError(errno,
+                             "%s", _("getting time of day"));
+        goto cleanup;
+    }
+
+    statbase = (tv.tv_sec * 1000UL * 1000UL) + tv.tv_usec;
+    statbase /= virBitmapCountBits(priv->cpuAffinitySet);
 
     for (i = 0, pos = -1; i < maxinfo; i++) {
         virDomainVcpuDefPtr vcpu = virDomainDefGetVcpu(def, i);
@@ -1455,7 +1456,7 @@ acrnDomainGetVcpus(virDomainPtr domain,
         info[i].cpu = pos;
 
         /* FIXME fake an increasing cpu time value */
-        info[i].cpuTime = statbase / 10;
+        info[i].cpuTime = statbase;
     }
 
     ret = maxinfo;
@@ -1942,6 +1943,148 @@ acrnDomainOpenConsole(virDomainPtr dom,
     }
 
     ret = 0;
+
+cleanup:
+    if (vm)
+        virObjectUnlock(vm);
+    return ret;
+}
+
+static int
+acrnGetDomainTotalCpuStats(virTypedParameterPtr params,
+                           int nparams)
+{
+    struct timeval tv;
+    unsigned long long cpu_time;
+
+    if (nparams == 0) /* return supported number of params */
+        return 1;
+
+    if (gettimeofday(&tv, NULL) < 0) {
+        virReportSystemError(errno,
+                             "%s", _("getting time of day"));
+        return -1;
+    }
+
+    /* FIXME fake an increasing cpu time value */
+    cpu_time = (tv.tv_sec * 1000UL * 1000UL) + tv.tv_usec;
+
+    /* entry 0 is cputime */
+    if (virTypedParameterAssign(&params[0], VIR_DOMAIN_CPU_STATS_CPUTIME,
+                                VIR_TYPED_PARAM_ULLONG, cpu_time) < 0)
+        return -1;
+
+    if (nparams > 1)
+        nparams = 1;
+
+    return nparams;
+}
+
+static int
+acrnGetPercpuStats(virTypedParameterPtr params,
+                   unsigned int nparams,
+                   int start_cpu,
+                   unsigned int ncpus,
+                   virBitmapPtr vcpus)
+{
+    int ret = -1;
+    size_t i;
+    int total_cpus, param_idx, need_cpus;
+    struct timeval tv;
+    unsigned long long cpu_time;
+    virBitmapPtr cpumap;
+    virTypedParameterPtr ent;
+
+    /* return the number of supported params */
+    if (nparams == 0 && ncpus != 0)
+        return 1;
+
+    if (!(cpumap = virHostCPUGetPresentBitmap()))
+        goto cleanup;
+
+    total_cpus = virBitmapSize(cpumap);
+
+    /* return total number of cpus */
+    if (ncpus == 0) {
+        ret = total_cpus;
+        goto cleanup;
+    }
+
+    if (start_cpu >= total_cpus) {
+        virReportError(VIR_ERR_INVALID_ARG,
+                       _("start_cpu %d larger than maximum of %d"),
+                       start_cpu, total_cpus - 1);
+        goto cleanup;
+    }
+
+    if (!vcpus) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, _("cpumask missing"));
+        goto cleanup;
+    }
+
+    if (gettimeofday(&tv, NULL) < 0) {
+        virReportSystemError(errno,
+                             "%s", _("getting time of day"));
+        goto cleanup;
+    }
+
+    /* FIXME fake an increasing cpu time value */
+    cpu_time = (tv.tv_sec * 1000UL * 1000UL) + tv.tv_usec;
+    cpu_time /= virBitmapCountBits(vcpus);
+
+    /* return percpu cputime in index 0 */
+    param_idx = 0;
+
+    /* number of cpus to compute */
+    need_cpus = MIN(total_cpus, start_cpu + ncpus);
+
+    for (i = start_cpu; i < need_cpus; i++) {
+        ent = &params[(i - start_cpu) * nparams + param_idx];
+        if (virTypedParameterAssign(ent, VIR_DOMAIN_CPU_STATS_CPUTIME,
+                                    VIR_TYPED_PARAM_ULLONG,
+                                    virBitmapIsBitSet(vcpus, i) ?
+                                    cpu_time : 0) < 0)
+            goto cleanup;
+    }
+
+    param_idx++;
+    ret = param_idx;
+
+cleanup:
+    virBitmapFree(cpumap);
+    return ret;
+}
+
+static int
+acrnDomainGetCPUStats(virDomainPtr dom,
+                      virTypedParameterPtr params,
+                      unsigned int nparams,
+                      int start_cpu,
+                      unsigned int ncpus,
+                      unsigned int flags)
+{
+    virDomainObjPtr vm;
+    acrnDomainObjPrivatePtr priv;
+    int ret = -1;
+
+    virCheckFlags(0, -1);
+
+    if (!(vm = acrnDomObjFromDomain(dom)))
+        goto cleanup;
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+                       _("domain is not running"));
+        goto cleanup;
+    }
+
+    if (start_cpu == -1) {
+        ret = acrnGetDomainTotalCpuStats(params, nparams);
+    } else {
+        priv = vm->privateData;
+        ret = acrnGetPercpuStats(params, nparams, start_cpu, ncpus,
+                                 priv->cpuAffinitySet);
+    }
 
 cleanup:
     if (vm)
@@ -2646,6 +2789,7 @@ static virHypervisorDriver acrnHypervisorDriver = {
     .connectDomainEventRegisterAny = acrnConnectDomainEventRegisterAny, /* 0.0.1 */
     .connectDomainEventDeregisterAny = acrnConnectDomainEventDeregisterAny, /* 0.0.1 */
     .domainOpenConsole = acrnDomainOpenConsole, /* 0.0.1 */
+    .domainGetCPUStats = acrnDomainGetCPUStats, /* 0.0.1 */
     .nodeGetCPUMap = acrnNodeGetCPUMap, /* 0.0.1 */
 };
 
