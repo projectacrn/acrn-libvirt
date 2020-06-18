@@ -1,0 +1,543 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <h3><a id="object_connect">virConnectPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_connect_detect_storage_pools">detect-storage-pools</a></td>
+          <td>Detect storage pools</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_getattr">getattr</a></td>
+          <td>Access connection</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_interface_transaction">interface-transaction</a></td>
+          <td>Interface transactions</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_pm_control">pm-control</a></td>
+          <td>Use host power management</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_read">read</a></td>
+          <td>Read host</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_domains">search-domains</a></td>
+          <td>List domains</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_interfaces">search-interfaces</a></td>
+          <td>List interfaces</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_networks">search-networks</a></td>
+          <td>List networks</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_node_devices">search-node-devices</a></td>
+          <td>List node devices</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_nwfilter_bindings">search-nwfilter-bindings</a></td>
+          <td>List network filter bindings</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_nwfilters">search-nwfilters</a></td>
+          <td>List network filters</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_secrets">search-secrets</a></td>
+          <td>List secrets</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_search_storage_pools">search-storage-pools</a></td>
+          <td>List storage pools</td>
+        </tr>
+        <tr>
+          <td><a id="perm_connect_write">write</a></td>
+          <td>Write host</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_domain">virDomainPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_domain_block_read">block-read</a></td>
+          <td>Read domain block</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_block_write">block-write</a></td>
+          <td>Write domain block</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_checkpoint">checkpoint</a></td>
+          <td>Checkpoint domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_core_dump">core-dump</a></td>
+          <td>Dump domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_delete">delete</a></td>
+          <td>Delete domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_fs_freeze">fs-freeze</a></td>
+          <td>Freeze and thaw domain filesystems</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_fs_trim">fs-trim</a></td>
+          <td>Trim domain filesystems</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_getattr">getattr</a></td>
+          <td>Access domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_hibernate">hibernate</a></td>
+          <td>Hibernate domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_init_control">init-control</a></td>
+          <td>Domain init control</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_inject_nmi">inject-nmi</a></td>
+          <td>Inject domain NMI</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_mem_read">mem-read</a></td>
+          <td>Read domain memory</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_migrate">migrate</a></td>
+          <td>Migrate domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_open_device">open-device</a></td>
+          <td>Open domain device</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_open_graphics">open-graphics</a></td>
+          <td>Open domain graphics</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_open_namespace">open-namespace</a></td>
+          <td>Open domain namespace</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_pm_control">pm-control</a></td>
+          <td>Use domain power management</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_read">read</a></td>
+          <td>Read domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_read_secure">read-secure</a></td>
+          <td>Read secure domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_reset">reset</a></td>
+          <td>Reset domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_save">save</a></td>
+          <td>Save domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_screenshot">screenshot</a></td>
+          <td>Take domain screenshot</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_send_input">send-input</a></td>
+          <td>Send domain input</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_send_signal">send-signal</a></td>
+          <td>Send domain signal</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_set_password">set-password</a></td>
+          <td>Set password of the domain's account</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_set_time">set-time</a></td>
+          <td>Write domain time</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_snapshot">snapshot</a></td>
+          <td>Snapshot domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_start">start</a></td>
+          <td>Start domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_stop">stop</a></td>
+          <td>Stop domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_suspend">suspend</a></td>
+          <td>Suspend domain</td>
+        </tr>
+        <tr>
+          <td><a id="perm_domain_write">write</a></td>
+          <td>Write domain</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_interface">virInterfacePtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_interface_delete">delete</a></td>
+          <td>Delete interface</td>
+        </tr>
+        <tr>
+          <td><a id="perm_interface_getattr">getattr</a></td>
+          <td>Access interface</td>
+        </tr>
+        <tr>
+          <td><a id="perm_interface_read">read</a></td>
+          <td>Read interface</td>
+        </tr>
+        <tr>
+          <td><a id="perm_interface_save">save</a></td>
+          <td>Save interface</td>
+        </tr>
+        <tr>
+          <td><a id="perm_interface_start">start</a></td>
+          <td>Start interface</td>
+        </tr>
+        <tr>
+          <td><a id="perm_interface_stop">stop</a></td>
+          <td>Stop interface</td>
+        </tr>
+        <tr>
+          <td><a id="perm_interface_write">write</a></td>
+          <td>Write interface</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_network">virNetworkPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_network_delete">delete</a></td>
+          <td>Delete network</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_getattr">getattr</a></td>
+          <td>Access network</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_read">read</a></td>
+          <td>Read network</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_save">save</a></td>
+          <td>Save network</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_search_ports">search-ports</a></td>
+          <td>List network ports</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_start">start</a></td>
+          <td>Start network</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_stop">stop</a></td>
+          <td>Stop network</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_write">write</a></td>
+          <td>Write network</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_network_port">virNetworkPortPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_network_port_create">create</a></td>
+          <td>Create network port</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_port_delete">delete</a></td>
+          <td>Delete network port</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_port_getattr">getattr</a></td>
+          <td>Access network port</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_port_read">read</a></td>
+          <td>Read network port</td>
+        </tr>
+        <tr>
+          <td><a id="perm_network_port_write">write</a></td>
+          <td>Read network port</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_node_device">virNodeDevicePtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_node_device_detach">detach</a></td>
+          <td>Detach node device</td>
+        </tr>
+        <tr>
+          <td><a id="perm_node_device_getattr">getattr</a></td>
+          <td>Access node device</td>
+        </tr>
+        <tr>
+          <td><a id="perm_node_device_read">read</a></td>
+          <td>Read node device</td>
+        </tr>
+        <tr>
+          <td><a id="perm_node_device_start">start</a></td>
+          <td>Start node device</td>
+        </tr>
+        <tr>
+          <td><a id="perm_node_device_stop">stop</a></td>
+          <td>Stop node device</td>
+        </tr>
+        <tr>
+          <td><a id="perm_node_device_write">write</a></td>
+          <td>Write node device</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_nwfilter">virNWFilterPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_nwfilter_delete">delete</a></td>
+          <td>Delete network filter</td>
+        </tr>
+        <tr>
+          <td><a id="perm_nwfilter_getattr">getattr</a></td>
+          <td>Access network filter</td>
+        </tr>
+        <tr>
+          <td><a id="perm_nwfilter_read">read</a></td>
+          <td>Read network filter</td>
+        </tr>
+        <tr>
+          <td><a id="perm_nwfilter_save">save</a></td>
+          <td>Save network filter</td>
+        </tr>
+        <tr>
+          <td><a id="perm_nwfilter_write">write</a></td>
+          <td>Write network filter</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_nwfilter_binding">virNWFilterBindingPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_nwfilter_binding_create">create</a></td>
+          <td>Create network filter binding</td>
+        </tr>
+        <tr>
+          <td><a id="perm_nwfilter_binding_delete">delete</a></td>
+          <td>Delete network filter binding</td>
+        </tr>
+        <tr>
+          <td><a id="perm_nwfilter_binding_getattr">getattr</a></td>
+          <td>Access network filter</td>
+        </tr>
+        <tr>
+          <td><a id="perm_nwfilter_binding_read">read</a></td>
+          <td>Read network filter binding</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_secret">virSecretPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_secret_delete">delete</a></td>
+          <td>Delete secret</td>
+        </tr>
+        <tr>
+          <td><a id="perm_secret_getattr">getattr</a></td>
+          <td>Access secret</td>
+        </tr>
+        <tr>
+          <td><a id="perm_secret_read">read</a></td>
+          <td>Read secret</td>
+        </tr>
+        <tr>
+          <td><a id="perm_secret_read_secure">read-secure</a></td>
+          <td>Read secure secret</td>
+        </tr>
+        <tr>
+          <td><a id="perm_secret_save">save</a></td>
+          <td>Save secret</td>
+        </tr>
+        <tr>
+          <td><a id="perm_secret_write">write</a></td>
+          <td>Write secret</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_storage_pool">virStoragePoolPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_storage_pool_delete">delete</a></td>
+          <td>Delete storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_format">format</a></td>
+          <td>Format storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_getattr">getattr</a></td>
+          <td>Access storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_read">read</a></td>
+          <td>Read storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_refresh">refresh</a></td>
+          <td>Refresh storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_save">save</a></td>
+          <td>Save storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_search_storage_vols">search-storage-vols</a></td>
+          <td>List storage pool volumes</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_start">start</a></td>
+          <td>Start storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_stop">stop</a></td>
+          <td>Stop storage pool</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_pool_write">write</a></td>
+          <td>Write storage pool</td>
+        </tr>
+      </tbody>
+    </table>
+    <h3><a id="object_storage_vol">virStorageVolPtr</a></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><a id="perm_storage_vol_create">create</a></td>
+          <td>Create storage volume</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_vol_data_read">data-read</a></td>
+          <td>Read storage volume data</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_vol_data_write">data-write</a></td>
+          <td>Write storage volume data</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_vol_delete">delete</a></td>
+          <td>Delete storage volume</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_vol_format">format</a></td>
+          <td>Format storage volume</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_vol_getattr">getattr</a></td>
+          <td>Access storage volume</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_vol_read">read</a></td>
+          <td>Read storage volume</td>
+        </tr>
+        <tr>
+          <td><a id="perm_storage_vol_resize">resize</a></td>
+          <td>Resize storage volume</td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+</html>
