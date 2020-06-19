@@ -2059,44 +2059,40 @@ cleanup:
     return ret;
 }
 
+static int
+acrnConnectURIProbe(char **uri)
+{
+    if (!acrn_driver)
+        return 0;
+
+    *uri = g_strdup("acrn:///system");
+    return 1;
+}
+
 static virDrvOpenStatus
 acrnConnectOpen(virConnectPtr conn,
                 virConnectAuthPtr auth G_GNUC_UNUSED,
                 virConfPtr conf G_GNUC_UNUSED,
                 unsigned int flags)
 {
-     virCheckFlags(VIR_CONNECT_RO, VIR_DRV_OPEN_ERROR);
+    virCheckFlags(VIR_CONNECT_RO, VIR_DRV_OPEN_ERROR);
 
-     if (conn->uri == NULL) {
-         if (acrn_driver == NULL)
-             return VIR_DRV_OPEN_DECLINED;
+    if (STRNEQ(conn->uri->path, "/system")) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Unexpected ACRN URI path '%s', try acrn:///system"),
+                       conn->uri->path);
+        return VIR_DRV_OPEN_ERROR;
+    }
 
-         if (!(conn->uri = virURIParse("acrn:///system")))
-             return VIR_DRV_OPEN_ERROR;
-     } else {
-         if (STRNEQ_NULLABLE(conn->uri->scheme, "acrn"))
-             return VIR_DRV_OPEN_DECLINED;
+    if (!acrn_driver) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("ACRN state driver is not active"));
+        return VIR_DRV_OPEN_ERROR;
+    }
 
-         if (conn->uri->server)
-             return VIR_DRV_OPEN_DECLINED;
+    conn->privateData = acrn_driver;
 
-         if (STRNEQ_NULLABLE(conn->uri->path, "/system")) {
-             virReportError(VIR_ERR_INTERNAL_ERROR,
-                            _("Unexpected ACRN URI path '%s', try acrn:///system"),
-                            conn->uri->path ? conn->uri->path : "NULL");
-             return VIR_DRV_OPEN_ERROR;
-         }
-
-         if (acrn_driver == NULL) {
-             virReportError(VIR_ERR_INTERNAL_ERROR,
-                            _("ACRN state driver is not active"));
-             return VIR_DRV_OPEN_ERROR;
-         }
-     }
-
-     conn->privateData = acrn_driver;
-
-     return VIR_DRV_OPEN_SUCCESS;
+    return VIR_DRV_OPEN_SUCCESS;
 }
 
 static int
@@ -2728,6 +2724,7 @@ cleanup:
 
 static virHypervisorDriver acrnHypervisorDriver = {
     .name = "ACRN",
+    .connectURIProbe = acrnConnectURIProbe, /* 0.0.1 */
     .connectOpen = acrnConnectOpen, /* 0.0.1 */
     .connectClose = acrnConnectClose, /* 0.0.1 */
     .connectGetType = acrnConnectGetType, /* 0.0.1 */
@@ -2765,6 +2762,8 @@ static virHypervisorDriver acrnHypervisorDriver = {
 };
 
 static virConnectDriver acrnConnectDriver = {
+    .localOnly = true,
+    .uriSchemes = (const char *[]){ "acrn", NULL },
     .hypervisorDriver = &acrnHypervisorDriver,
 };
 
