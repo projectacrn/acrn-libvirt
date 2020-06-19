@@ -55,6 +55,39 @@ virtacrnd_CFLAGS = \
 virtacrnd_LDFLAGS = $(REMOTE_DAEMON_LD_FLAGS)
 virtacrnd_LDADD = $(REMOTE_DAEMON_LD_ADD)
 
+SYSTEMD_UNIT_FILES += \
+	virtacrnd.service \
+	virtacrnd.socket \
+	virtacrnd-ro.socket \
+	virtacrnd-admin.socket \
+	$(NULL)
+SYSTEMD_UNIT_FILES_IN += \
+	acrn/virtacrnd.service.in \
+	$(NULL)
+
+OPENRC_INIT_FILES += \
+	virtacrnd.init \
+	$(NULL)
+OPENRC_INIT_FILES_IN += \
+	acrn/virtacrnd.init.in \
+	$(NULL)
+
+VIRTACRND_UNIT_VARS = \
+	$(VIRTD_UNIT_VARS) \
+	-e 's|[@]name[@]|Libvirt acrn|g' \
+	-e 's|[@]service[@]|virtacrnd|g' \
+	-e 's|[@]sockprefix[@]|virtacrnd|g' \
+	$(NULL)
+
+virtacrnd.init: acrn/virtacrnd.init.in $(top_builddir)/config.status
+	$(AM_V_GEN)$(SED) $(LIBVIRTD_INIT_VARS) $< > $@-t && mv $@-t $@
+
+virtacrnd.service: acrn/virtacrnd.service.in $(top_builddir)/config.status
+	$(AM_V_GEN)$(SED) $(VIRTACRND_UNIT_VARS) $< > $@-t && mv $@-t $@
+
+virtacrn%.socket: remote/libvirt%.socket.in $(top_builddir)/config.status
+	$(AM_V_GEN)$(SED) $(VIRTACRND_UNIT_VARS) $< > $@-t && mv $@-t $@
+
 acrn/virtacrnd.conf: remote/libvirtd.conf.in
 	$(AM_V_GEN)$(SED) \
 		-e '/[@]CUT_ENABLE_IP[@]/,/[@]END[@]/d' \
