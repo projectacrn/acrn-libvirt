@@ -15,6 +15,14 @@ struct _acrnDomainObjPrivate {
     size_t nttys;
 };
 
+typedef struct _acrnDomainXmlNsDef acrnDomainXmlNsDef;
+typedef acrnDomainXmlNsDef *acrnDomainXmlNsDefPtr;
+struct _acrnDomainXmlNsDef {
+    bool rtvm;
+    size_t nargs;
+    char **args;
+};
+
 void acrnDomainTtyCleanup(acrnDomainObjPrivatePtr priv);
 virDomainXMLOptionPtr virAcrnDriverCreateXMLConf(void);
 #endif /* __ACRN_DOMAIN_H__ */

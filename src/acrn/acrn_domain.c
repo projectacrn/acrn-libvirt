@@ -1,12 +1,15 @@
 #include <config.h>
+#include <libxml/xpathInternals.h>
 
 #include "acrn_domain.h"
 #include "acrn_device.h"
+#include "virstring.h"
 #include "viralloc.h"
 #include "virfile.h"
 #include "virlog.h"
 
 #define VIR_FROM_THIS VIR_FROM_ACRN
+#define ACRN_NAMESPACE_HREF     "http://libvirt.org/schemas/domain/acrn/1.0"
 
 VIR_LOG_INIT("acrn.acrn_domain");
 
@@ -343,10 +346,201 @@ static virDomainXMLPrivateDataCallbacks virAcrnDriverPrivateDataCallbacks = {
     .free = acrnDomainObjPrivateFree,
 };
 
+static void
+acrnDomainDefNamespaceFree(void *nsdata)
+{
+    acrnDomainXmlNsDefPtr nsdef = nsdata;
+
+    if (!nsdef)
+        return;
+
+    virStringListFreeCount(nsdef->args, nsdef->nargs);
+    VIR_FREE(nsdef);
+}
+
+static int
+acrnDomainDefNamespaceParseConfig(acrnDomainXmlNsDefPtr nsdef,
+                                  xmlXPathContextPtr ctxt)
+{
+    xmlNodePtr *nodes, node;
+    int nnodes, ret = -1;
+
+    if ((nnodes = virXPathNodeSet("./acrn:config",
+                                  ctxt, &nodes)) < 0) {
+        virReportError(VIR_ERR_XML_ERROR,
+                       _("Invalid acrn:config node"));
+        return -1;
+    }
+
+    if (nnodes == 0) {
+        ret = 0;
+        goto cleanup;
+    }
+
+    if (nnodes > 1) {
+        virReportError(VIR_ERR_XML_ERROR,
+                       _("More than 1 acrn:config nodes"));
+        goto cleanup;
+    }
+
+    for (node = nodes[0]->children; node; node = node->next) {
+        if (node->type == XML_ELEMENT_NODE) {
+            if (virXMLNodeNameEqual(node, "rtvm"))
+                nsdef->rtvm = true;
+        }
+    }
+
+    ret = 0;
+
+cleanup:
+    if (nodes)
+        VIR_FREE(nodes);
+    return ret;
+}
+
+static int
+acrnDomainDefNamespaceParseCommandlineArgs(acrnDomainXmlNsDefPtr nsdef,
+                                           xmlXPathContextPtr ctxt)
+{
+    xmlNodePtr *nodes;
+    int nnodes, i, ret = -1;
+
+    if ((nnodes = virXPathNodeSet("./acrn:commandline/acrn:arg",
+                                  ctxt, &nodes)) < 0) {
+        virReportError(VIR_ERR_XML_ERROR,
+                       _("Invalid acrn:arg node"));
+        return -1;
+    }
+
+    if (nnodes == 0) {
+        ret = 0;
+        goto cleanup;
+    }
+
+    if (VIR_ALLOC_N(nsdef->args, nnodes) < 0) {
+        virReportError(VIR_ERR_NO_MEMORY, NULL);
+        goto cleanup;
+    }
+
+    for (i = 0; i < nnodes; i++) {
+        if (!(nsdef->args[nsdef->nargs++] =
+                    virXMLPropString(nodes[i], "value"))) {
+            virReportError(VIR_ERR_XML_ERROR,
+                           _("No command-line argument specified"));
+            goto cleanup;
+        }
+    }
+
+    ret = 0;
+
+cleanup:
+    if (nodes)
+        VIR_FREE(nodes);
+    return ret;
+}
+
+static int
+acrnDomainDefNamespaceParse(xmlDocPtr xml ATTRIBUTE_UNUSED,
+                            xmlNodePtr root ATTRIBUTE_UNUSED,
+                            xmlXPathContextPtr ctxt,
+                            void **data)
+{
+    acrnDomainXmlNsDefPtr nsdata;
+    int ret = -1;
+
+    if (xmlXPathRegisterNs(ctxt, BAD_CAST "acrn",
+                           BAD_CAST ACRN_NAMESPACE_HREF) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Failed to register xml namespace '%s'"),
+                       ACRN_NAMESPACE_HREF);
+        return -1;
+    }
+
+    if (VIR_ALLOC(nsdata) < 0)
+        return -1;
+
+    if (acrnDomainDefNamespaceParseConfig(nsdata, ctxt) < 0 ||
+        acrnDomainDefNamespaceParseCommandlineArgs(nsdata, ctxt) < 0)
+        goto cleanup;
+
+    if (nsdata->rtvm || nsdata->nargs) {
+        *data = nsdata;
+        nsdata = NULL;
+    }
+
+    ret = 0;
+
+cleanup:
+    acrnDomainDefNamespaceFree(nsdata);
+    return ret;
+}
+
+static void
+acrnDomainDefNamespaceFormatXMLConfig(virBufferPtr buf,
+                                      acrnDomainXmlNsDefPtr xmlns)
+{
+    if (!xmlns->rtvm)
+        return;
+
+    virBufferAddLit(buf, "<acrn:config>\n");
+    virBufferAdjustIndent(buf, 2);
+
+    virBufferAddLit(buf, "<acrn:rtvm/>\n");
+
+    virBufferAdjustIndent(buf, -2);
+    virBufferAddLit(buf, "</acrn:config>\n");
+}
+
+static void
+acrnDomainDefNamespaceFormatXMLCommandlineArgs(virBufferPtr buf,
+                                               acrnDomainXmlNsDefPtr cmd)
+{
+    size_t i;
+
+    if (!cmd->nargs)
+        return;
+
+    virBufferAddLit(buf, "<acrn:commandline>\n");
+    virBufferAdjustIndent(buf, 2);
+
+    for (i = 0; i < cmd->nargs; i++)
+        virBufferEscapeString(buf, "<acrn:arg value='%s'/>\n",
+                              cmd->args[i]);
+
+    virBufferAdjustIndent(buf, -2);
+    virBufferAddLit(buf, "</acrn:commandline>\n");
+}
+
+static int
+acrnDomainDefNamespaceFormatXML(virBufferPtr buf,
+                                void *nsdata)
+{
+    acrnDomainXmlNsDefPtr xmlns = nsdata;
+
+    acrnDomainDefNamespaceFormatXMLConfig(buf, xmlns);
+    acrnDomainDefNamespaceFormatXMLCommandlineArgs(buf, xmlns);
+
+    return 0;
+}
+
+static const char *
+acrnDomainDefNamespaceHref(void)
+{
+    return "xmlns:acrn='" ACRN_NAMESPACE_HREF "'";
+}
+
+static virDomainXMLNamespace virAcrnDriverDomainXMLNamespace = {
+    .parse = acrnDomainDefNamespaceParse,
+    .free = acrnDomainDefNamespaceFree,
+    .format = acrnDomainDefNamespaceFormatXML,
+    .href = acrnDomainDefNamespaceHref,
+};
+
 virDomainXMLOptionPtr
 virAcrnDriverCreateXMLConf(void)
 {
     return virDomainXMLOptionNew(&virAcrnDriverDomainDefParserConfig,
                                  &virAcrnDriverPrivateDataCallbacks,
-                                 NULL, NULL, NULL);
+                                 &virAcrnDriverDomainXMLNamespace,
+                                 NULL, NULL);
 }
