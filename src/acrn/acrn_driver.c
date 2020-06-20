@@ -3,7 +3,6 @@
 #include <sys/sysinfo.h>
 #include <sys/ioctl.h>
 #include <uuid/uuid.h>
-#include <libxml/xpathInternals.h>
 #include "configmake.h"
 #include "datatypes.h"
 #include "node_device_conf.h"
@@ -31,7 +30,6 @@
 #define VIR_FROM_THIS VIR_FROM_ACRN
 #define ACRN_DM_PATH            "/usr/bin/acrn-dm"
 #define ACRN_CTL_PATH           "/usr/bin/acrnctl"
-#define ACRN_NAMESPACE_HREF     "http://libvirt.org/schemas/domain/acrn/0.0"
 #define ACRN_OFFLINE_PATH       "/sys/class/vhm/acrn_vhm/offline_cpu"
 #define SYSFS_CPU_PATH          "/sys/devices/system/cpu"
 #define ACRN_AUTOSTART_DIR      SYSCONFDIR "/libvirt/acrn/autostart"
@@ -579,6 +577,7 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
     virDomainDefPtr def;
     virBitmapPtr allowedmask = NULL;
     acrnDomainObjPrivatePtr priv;
+    acrnDomainXmlNsDefPtr nsdef;
     int ret = -1;
 
     if (!vm || !(def = vm->def))
@@ -613,10 +612,12 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
         goto cleanup;
     }
 
+    nsdef = def->namespaceData;
+
     /* vCPU placement */
     if (acrnAllocateVcpus(pi,
                           allowedmask ? allowedmask : entry->pcpus,
-                          false, def->maxvcpus, allocMap,
+                          nsdef && nsdef->rtvm, def->maxvcpus, allocMap,
                           priv->cpuAffinitySet) < 0)
         goto cleanup;
 
@@ -1011,9 +1012,11 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     virDomainDefPtr def;
     virCommandPtr cmd;
     acrnDomainObjPrivatePtr priv;
+    acrnDomainXmlNsDefPtr nsdef;
     struct acrnCmdDeviceData data = { 0 };
     char *pcpus;
     char uuidstr[VIR_UUID_STRING_BUFLEN];
+    size_t i;
 
     if (!vm || !(def = vm->def))
         return NULL;
@@ -1045,6 +1048,15 @@ acrnBuildStartCmd(virDomainObjPtr vm)
         virCommandAddArg(cmd, virUUIDFormat(priv->hvUUID, uuidstr));
     }
 
+    nsdef = def->namespaceData;
+
+    /* RTVM */
+    if (nsdef && nsdef->rtvm)
+        virCommandAddArgList(cmd,
+                             "--lapic_pt",
+                             "--virtio_poll", "1000000",
+                             NULL);
+
     /* PCI hostbridge */
     virCommandAddArgList(cmd, "-s", "0:0,hostbridge", NULL);
 
@@ -1055,6 +1067,12 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     if (virDomainDeviceInfoIterate(def, acrnCommandAddDeviceArg, &data)) {
         virCommandFree(cmd);
         return NULL;
+    }
+
+    /* User-defined command-line args */
+    if (nsdef) {
+        for (i = 0; i < nsdef->nargs; i++)
+            virCommandAddArg(cmd, nsdef->args[i]);
     }
 
     /* Bootloader */
@@ -1485,6 +1503,7 @@ acrnDomainCreateXML(virConnectPtr conn,
     acrnConnectPtr privconn = conn->privateData;
     struct acrnVmList *vmList = NULL;
     acrnDomainObjPrivatePtr priv;
+    acrnDomainXmlNsDefPtr nsdef;
     virDomainDefPtr def;
     virDomainObjPtr vm = NULL;
     virObjectEventPtr event = NULL;
@@ -1512,9 +1531,11 @@ acrnDomainCreateXML(virConnectPtr conn,
     if (acrnGetPlatform(&privconn->pi, vmList) < 0)
         goto cleanup;
 
+    nsdef = def->namespaceData;
+
     /* get hv UUID for the allocated VM */
     if ((idx = acrnAllocateVm(privconn->domains, def, &privconn->pi, vmList,
-                              false, hvUUID)) < 0)
+                              nsdef && nsdef->rtvm, hvUUID)) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
@@ -1654,6 +1675,7 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
     acrnConnectPtr privconn = conn->privateData;
     struct acrnVmList *vmList = NULL;
     acrnDomainObjPrivatePtr priv;
+    acrnDomainXmlNsDefPtr nsdef;
     virDomainDefPtr def = NULL, oldDef = NULL;
     virDomainObjPtr vm = NULL;
     virObjectEventPtr event = NULL;
@@ -1682,9 +1704,11 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
     if (acrnGetPlatform(&privconn->pi, vmList) < 0)
         goto cleanup;
 
+    nsdef = def->namespaceData;
+
     /* get hv UUID for the allocated VM */
     if (acrnAllocateVm(privconn->domains, def, &privconn->pi, vmList,
-                       false, hvUUID) < 0)
+                       nsdef && nsdef->rtvm, hvUUID) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
