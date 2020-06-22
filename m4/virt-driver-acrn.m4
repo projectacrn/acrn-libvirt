@@ -5,16 +5,12 @@ AC_DEFUN([LIBVIRT_DRIVER_ARG_ACRN],[
 ])
 
 AC_DEFUN([LIBVIRT_DRIVER_CHECK_ACRN],[
-    if test "$with_acrn" != "no" ; then
+    if test "$with_acrn" == "check" ; then
         AC_PATH_PROG([ACRNDM], [acrn-dm], [], [$PATH:/usr/bin])
         AC_PATH_PROG([ACRNCTL], [acrnctl], [], [$PATH:/usr/bin])
 
         if test -z "$ACRNDM" || test -z "$ACRNCTL"; then
-            if test "$with_acrn" = "check"; then
-                with_acrn="no"
-            else
-                AC_MSG_ERROR([The acrn driver cannot be enabled])
-            fi
+            with_acrn="no"
         else
             with_acrn="yes"
         fi
