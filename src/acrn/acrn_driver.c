@@ -321,13 +321,21 @@ acrnFindHvUUID(virDomainObjPtr vm, void *opaque)
     return ret;
 }
 
+static bool
+acrnIsRtvm(virDomainDefPtr def)
+{
+    acrnDomainXmlNsDefPtr nsdef = def->namespaceData;
+
+    return (nsdef && nsdef->rtvm);
+}
+
 /*
  * This function must not be called with any virDomainObjPtr
  * lock held, as it can attempt to hold any such lock in doms.
  */
 static ssize_t
 acrnAllocateVm(virDomainObjListPtr doms, virDomainDefPtr def,
-               acrnPlatformInfoPtr pi, struct acrnVmList *vmList, bool rtvm,
+               acrnPlatformInfoPtr pi, struct acrnVmList *vmList,
                unsigned char *uuid)
 {
     enum acrn_vm_severity severity;
@@ -338,7 +346,7 @@ acrnAllocateVm(virDomainObjListPtr doms, virDomainDefPtr def,
     char *maskstr = NULL;
     char uuidstr[VIR_UUID_STRING_BUFLEN];
 
-    severity = (rtvm) ? SEVERITY_RTVM : SEVERITY_STANDARD_VM;
+    severity = (acrnIsRtvm(def)) ? SEVERITY_RTVM : SEVERITY_STANDARD_VM;
 
     if (def->cpumask) {
         /* prepare a sanitized cpumask */
@@ -577,7 +585,6 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
     virDomainDefPtr def;
     virBitmapPtr allowedmask = NULL;
     acrnDomainObjPrivatePtr priv;
-    acrnDomainXmlNsDefPtr nsdef;
     int ret = -1;
 
     if (!vm || !(def = vm->def))
@@ -612,12 +619,10 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
         goto cleanup;
     }
 
-    nsdef = def->namespaceData;
-
     /* vCPU placement */
     if (acrnAllocateVcpus(pi,
                           allowedmask ? allowedmask : entry->pcpus,
-                          nsdef && nsdef->rtvm, def->maxvcpus, allocMap,
+                          acrnIsRtvm(def), def->maxvcpus, allocMap,
                           priv->cpuAffinitySet) < 0)
         goto cleanup;
 
@@ -1048,10 +1053,8 @@ acrnBuildStartCmd(virDomainObjPtr vm)
         virCommandAddArg(cmd, virUUIDFormat(priv->hvUUID, uuidstr));
     }
 
-    nsdef = def->namespaceData;
-
     /* RTVM */
-    if (nsdef && nsdef->rtvm)
+    if (acrnIsRtvm(def))
         virCommandAddArgList(cmd,
                              "--lapic_pt",
                              "--virtio_poll", "1000000",
@@ -1068,6 +1071,8 @@ acrnBuildStartCmd(virDomainObjPtr vm)
         virCommandFree(cmd);
         return NULL;
     }
+
+    nsdef = def->namespaceData;
 
     /* User-defined command-line args */
     if (nsdef) {
@@ -1503,7 +1508,6 @@ acrnDomainCreateXML(virConnectPtr conn,
     acrnConnectPtr privconn = conn->privateData;
     struct acrnVmList *vmList = NULL;
     acrnDomainObjPrivatePtr priv;
-    acrnDomainXmlNsDefPtr nsdef;
     virDomainDefPtr def;
     virDomainObjPtr vm = NULL;
     virObjectEventPtr event = NULL;
@@ -1531,11 +1535,9 @@ acrnDomainCreateXML(virConnectPtr conn,
     if (acrnGetPlatform(&privconn->pi, vmList) < 0)
         goto cleanup;
 
-    nsdef = def->namespaceData;
-
     /* get hv UUID for the allocated VM */
     if ((idx = acrnAllocateVm(privconn->domains, def, &privconn->pi, vmList,
-                              nsdef && nsdef->rtvm, hvUUID)) < 0)
+                              hvUUID)) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
@@ -1675,7 +1677,6 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
     acrnConnectPtr privconn = conn->privateData;
     struct acrnVmList *vmList = NULL;
     acrnDomainObjPrivatePtr priv;
-    acrnDomainXmlNsDefPtr nsdef;
     virDomainDefPtr def = NULL, oldDef = NULL;
     virDomainObjPtr vm = NULL;
     virObjectEventPtr event = NULL;
@@ -1704,11 +1705,9 @@ acrnDomainDefineXMLFlags(virConnectPtr conn, const char *xml,
     if (acrnGetPlatform(&privconn->pi, vmList) < 0)
         goto cleanup;
 
-    nsdef = def->namespaceData;
-
     /* get hv UUID for the allocated VM */
     if (acrnAllocateVm(privconn->domains, def, &privconn->pi, vmList,
-                       nsdef && nsdef->rtvm, hvUUID) < 0)
+                       hvUUID) < 0)
         goto cleanup;
 
     if (!(vm = virDomainObjListAdd(privconn->domains, def,
