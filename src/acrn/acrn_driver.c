@@ -2615,20 +2615,12 @@ acrnOfflineCpus(int nprocs, virBitmapPtr pcpus, size_t *allocMap)
 
 static int
 acrnInitPlatform(acrnPlatformInfoPtr pi, virNodeInfoPtr nodeInfo,
-                 size_t **allocMap)
+                 size_t **allocMap, const struct acrnVmList *list)
 {
-    struct acrnVmList *list;
     virBitmapPtr postLaunchedPcpus = NULL;
     uint16_t totalCpus;
     size_t i, *map = NULL;
     int ret;
-
-    if (!(list = acrnVmListNew()))
-        return -ENOMEM;
-
-    ret = acrnGetPlatform(pi, list);
-    if (ret < 0)
-        goto cleanup;
 
     totalCpus = pi->cpu_num;
 
@@ -2694,7 +2686,6 @@ cleanup:
     if (map)
         VIR_FREE(map);
     virBitmapFree(postLaunchedPcpus);
-    acrnVmListFree(list);
     return ret;
 }
 
@@ -2760,8 +2751,11 @@ acrnStateInitialize(bool privileged,
     if (virCapabilitiesGetNodeInfo(&acrn_driver->nodeInfo) < 0)
         goto cleanup;
 
-    ret = acrnInitPlatform(&acrn_driver->pi, &acrn_driver->nodeInfo,
-                           &acrn_driver->vcpuAllocMap);
+    list = acrnVmListNew();
+    if (!list)
+        goto cleanup;
+
+    ret = acrnGetPlatform(&acrn_driver->pi, list);
     if (ret == -ENODEV) {
         /* we are not running on an ACRN enabled system */
         VIR_INFO("ACRN hypervisor not available, disabling driver");
@@ -2769,6 +2763,10 @@ acrnStateInitialize(bool privileged,
         goto cleanup_nofail;
     }
     if (ret < 0)
+        goto cleanup;
+
+    if (acrnInitPlatform(&acrn_driver->pi, &acrn_driver->nodeInfo,
+                         &acrn_driver->vcpuAllocMap, list) < 0)
         goto cleanup;
 
     if (!(acrn_driver->domains = virDomainObjListNew()))
@@ -2792,13 +2790,6 @@ acrnStateInitialize(bool privileged,
                                        ACRN_AUTOSTART_DIR, false,
                                        acrn_driver->xmlopt,
                                        NULL, NULL) < 0)
-        goto cleanup;
-
-    list = acrnVmListNew();
-    if (!list)
-        goto cleanup;
-
-    if (acrnGetPlatform(&acrn_driver->pi, list) < 0)
         goto cleanup;
 
     if (virDomainObjListForEach(acrn_driver->domains, false,
