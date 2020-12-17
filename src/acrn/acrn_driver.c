@@ -665,7 +665,7 @@ acrnCreateTapDev(virDomainNetDefPtr net, const unsigned char *uuid)
                 virDomainNetGetActualVirtPortProfile(net),
                 virDomainNetGetActualVlan(net),
                 virDomainNetGetActualPortOptionsIsolated(net),
-                NULL, 0, NULL,
+                NULL, net->mtu, NULL,
                 VIR_NETDEV_TAP_CREATE_IFUP |
                 VIR_NETDEV_TAP_CREATE_PERSIST) < 0) {
         virReportError(VIR_WAR_NO_NETWORK, "%s", net->ifname);
