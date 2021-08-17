@@ -1341,6 +1341,25 @@ cleanup:
 }
 
 static int
+acrnDomainIsPersistent(virDomainPtr domain)
+{
+    virDomainObjPtr obj;
+    int ret = -1;
+
+    if (!(obj = acrnDomObjFromDomain(domain)))
+        goto cleanup;
+
+    if (virDomainIsPersistentEnsureACL(domain->conn, obj->def) < 0)
+        goto cleanup;
+
+    ret = obj->persistent;
+
+ cleanup:
+    virDomainObjEndAPI(&obj);
+    return ret;
+}
+
+static int
 acrnDomainGetInfo(virDomainPtr dom, virDomainInfoPtr info)
 {
     virDomainObjPtr vm;
@@ -2700,6 +2719,9 @@ acrnPersistentDomainInit(virDomainObjPtr dom, void *opaque)
     acrnDomainObjPrivatePtr priv = dom->privateData;
     virObjectEventPtr event = NULL;
 
+    if (!dom->persistent)
+        return -1;
+
     if (acrnAllocateVm(acrn_driver->domains, dom->def, &acrn_driver->pi, vmList,
                        hvUUID) < 0)
         return -1;
@@ -2824,6 +2846,7 @@ static virHypervisorDriver acrnHypervisorDriver = {
     .domainLookupByName = acrnDomainLookupByName, /* 0.0.1 */
     .domainShutdown = acrnDomainShutdown, /* 0.0.1 */
     .domainDestroy = acrnDomainDestroy, /* 0.0.1 */
+    .domainIsPersistent = acrnDomainIsPersistent, /* 0.0.1 */
     .domainGetInfo = acrnDomainGetInfo,  /* 0.0.1 */
     .domainGetState = acrnDomainGetState, /* 0.0.1 */
     .domainGetVcpus = acrnDomainGetVcpus, /* 0.0.1 */
