@@ -34,6 +34,7 @@
 #define SYSFS_CPU_PATH          "/sys/devices/system/cpu"
 #define ACRN_AUTOSTART_DIR      SYSCONFDIR "/libvirt/acrn/autostart"
 #define ACRN_CONFIG_DIR         SYSCONFDIR "/libvirt/acrn"
+#define ACRN_STATE_DIR          RUNSTATEDIR "/libvirt/acrn"
 #define ACRN_NET_GENERATED_TAP_PREFIX   "tap"
 #define ACRN_PI_VERSION         (0x100)
 
@@ -71,6 +72,11 @@ struct acrnVmList {
     size_t size;
 };
 
+struct acrnAutostartData {
+    acrnConnectPtr driver;
+    virConnectPtr conn;
+    struct acrnVmList *vmlist;
+};
 static acrnConnectPtr acrn_driver = NULL;
 
 static void
@@ -1145,7 +1151,60 @@ cleanup:
     }
     return ret;
 }
+static int
+acrnAutostartDomain(virDomainObjPtr vm, void *opaque)
+{
+    const struct acrnAutostartData *data = opaque;
+    int ret = 0;
+    acrnConnectPtr privconn = data->driver;
+    acrnDomainObjPrivatePtr priv;
+    struct acrnVmList *vmList = data->vmlist;
+    ssize_t idx;
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
 
+    virObjectLock(vm);
+    if (vm->autostart && !virDomainObjIsActive(vm)) {
+        virResetLastError();
+        priv = vm->privateData;
+        /* find the allocated VM */
+        if ((idx = acrnFindVm(vmList, priv->hvUUID)) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                        _("vm(%s) not found"),
+                        virUUIDFormat(priv->hvUUID, uuidstr));
+            goto cleanup;
+        }
+
+        if (acrnProcessPrepareDomain(vm, &privconn->pi, &vmList->vm[idx],
+                                    privconn->vcpuAllocMap) < 0)
+            goto cleanup;
+        if (acrnProcessStart(vm) < 0) {
+            /* domain must be persistent */
+            acrnFreeVcpus(priv->cpuAffinitySet, privconn->vcpuAllocMap);
+            goto cleanup;
+        }
+        if (ret < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                        _("Failed to autostart VM '%s': %s"),
+                        vm->def->name, virGetLastErrorMessage());
+        }
+    }
+cleanup:
+	virObjectUnlock(vm);
+	return ret;
+}
+
+static void
+acrnAutostartDomains(acrnConnectPtr driver, struct acrnVmList *vmlist)
+{
+    virConnectPtr conn = virConnectOpen("acrn:///system");
+    /* Ignoring NULL conn which is mostly harmless here */
+
+    struct acrnAutostartData data = { driver, conn, vmlist};
+
+    virDomainObjListForEach(driver->domains, false, acrnAutostartDomain, &data);
+
+    virObjectUnref(conn);
+}
 static virCommandPtr
 acrnBuildStopCmd(virDomainDefPtr def)
 {
@@ -1356,6 +1415,89 @@ acrnDomainIsPersistent(virDomainPtr domain)
 
  cleanup:
     virDomainObjEndAPI(&obj);
+    return ret;
+}
+
+static int
+acrnDomainGetAutostart(virDomainPtr domain, int *autostart)
+{
+    virDomainObjPtr vm;
+    int ret = -1;
+
+    if (!(vm = acrnDomObjFromDomain(domain)))
+        goto cleanup;
+
+    if (virDomainGetAutostartEnsureACL(domain->conn, vm->def) < 0)
+        goto cleanup;
+
+    *autostart = vm->autostart;
+    ret = 0;
+
+ cleanup:
+    virDomainObjEndAPI(&vm);
+    return ret;
+}
+
+static int
+acrnDomainSetAutostart(virDomainPtr domain, int autostart)
+{
+    virDomainObjPtr vm;
+    char *configFile = NULL;
+    char *autostartLink = NULL;
+    int ret = -1;
+
+    if (!(vm = acrnDomObjFromDomain(domain)))
+        goto cleanup;
+
+    if (virDomainSetAutostartEnsureACL(domain->conn, vm->def) < 0)
+        goto cleanup;
+
+    if (!vm->persistent) {
+        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+                       _("cannot set autostart for transient domain"));
+        goto cleanup;
+    }
+
+    autostart = (autostart != 0);
+
+    if (vm->autostart != autostart) {
+        if ((configFile = virDomainConfigFile(ACRN_CONFIG_DIR, vm->def->name)) == NULL)
+            goto cleanup;
+        if ((autostartLink = virDomainConfigFile(ACRN_AUTOSTART_DIR, vm->def->name)) == NULL)
+            goto cleanup;
+
+        if (autostart) {
+            if (virFileMakePath(ACRN_AUTOSTART_DIR) < 0) {
+                virReportSystemError(errno,
+                                     _("cannot create autostart directory %s"),
+                                     ACRN_AUTOSTART_DIR);
+                goto cleanup;
+            }
+
+            if (symlink(configFile, autostartLink) < 0) {
+                virReportSystemError(errno,
+                                     _("Failed to create symlink '%s' to '%s'"),
+                                     autostartLink, configFile);
+                goto cleanup;
+            }
+        } else {
+            if (unlink(autostartLink) < 0 && errno != ENOENT && errno != ENOTDIR) {
+                virReportSystemError(errno,
+                                     _("Failed to delete symlink '%s'"),
+                                     autostartLink);
+                goto cleanup;
+            }
+        }
+
+        vm->autostart = autostart;
+    }
+
+    ret = 0;
+
+ cleanup:
+    VIR_FREE(configFile);
+    VIR_FREE(autostartLink);
+    virDomainObjEndAPI(&vm);
     return ret;
 }
 
@@ -2750,6 +2892,7 @@ acrnStateInitialize(bool privileged,
 {
     int ret;
     struct acrnVmList *list = NULL;
+    bool autostart = true;
 
     if (root) {
         virReportError(VIR_ERR_INVALID_ARG, "%s",
@@ -2807,6 +2950,19 @@ acrnStateInitialize(bool privileged,
     if (!(acrn_driver->hostdevMgr = virHostdevManagerGetDefault()))
         goto cleanup;
 
+    if (virFileMakePath(ACRN_STATE_DIR) < 0) {
+	    virReportSystemError(errno,
+			                _("Failed to mkdir %s"),
+			                ACRN_STATE_DIR);
+	    goto cleanup;
+    }
+
+    if (virDomainObjListLoadAllConfigs(acrn_driver->domains,
+                                       ACRN_STATE_DIR,
+                                       NULL, true,
+                                       acrn_driver->xmlopt,
+                                       NULL, NULL) < 0)
+        goto cleanup;
     /* load inactive persistent configs */
     if (virDomainObjListLoadAllConfigs(acrn_driver->domains,
                                        ACRN_CONFIG_DIR,
@@ -2818,6 +2974,12 @@ acrnStateInitialize(bool privileged,
     if (virDomainObjListForEach(acrn_driver->domains, false,
                                 acrnPersistentDomainInit, list) < 0)
         goto cleanup;
+
+    if (virDriverShouldAutostart(ACRN_STATE_DIR, &autostart) < 0)
+        goto cleanup;
+
+    if (autostart)
+        acrnAutostartDomains(acrn_driver, list);
 
     acrnVmListFree(list);
     return VIR_DRV_STATE_INIT_COMPLETE;
@@ -2847,6 +3009,8 @@ static virHypervisorDriver acrnHypervisorDriver = {
     .domainShutdown = acrnDomainShutdown, /* 0.0.1 */
     .domainDestroy = acrnDomainDestroy, /* 0.0.1 */
     .domainIsPersistent = acrnDomainIsPersistent, /* 0.0.1 */
+    .domainGetAutostart = acrnDomainGetAutostart, /* 0.0.1 */
+    .domainSetAutostart = acrnDomainSetAutostart, /* 0.0.1 */
     .domainGetInfo = acrnDomainGetInfo,  /* 0.0.1 */
     .domainGetState = acrnDomainGetState, /* 0.0.1 */
     .domainGetVcpus = acrnDomainGetVcpus, /* 0.0.1 */
