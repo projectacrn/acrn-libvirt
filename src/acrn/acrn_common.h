@@ -4,10 +4,9 @@
 #define _IC_ID(x, y) (((x)<<24)|(y))
 #define IC_ID 0x43UL
 
-/* General */
-#define IC_ID_GEN_BASE                  0x0UL
-#define IC_GET_PLATFORM_INFO            _IC_ID(IC_ID, IC_ID_GEN_BASE + 0x03)
+#define ACRN_IOCTL_TYPE			0xA2
 
+#define IC_GET_PLATFORM_INFO		_IOR(ACRN_IOCTL_TYPE, 0x03, struct acrn_platform_info)
 /* ACRN guest severity */
 enum acrn_vm_severity {
     SEVERITY_SAFETY_VM = 0x40U,
@@ -45,48 +44,39 @@ struct acrn_vm_config {
      */
 } __attribute__((aligned(8)));
 
-typedef struct platform_info acrnPlatformInfo;
+typedef struct acrn_platform_info acrnPlatformInfo;
 typedef acrnPlatformInfo *acrnPlatformInfoPtr;
-struct platform_info {
-    /** Hardware Information */
-    /** Physical CPU number */
-    uint16_t cpu_num;
+#define ACRN_PLATFORM_LAPIC_IDS_MAX	64
+struct acrn_platform_info {
+	struct {
+		/** Physical CPU number of the platform */
+		__u16	cpu_num;
+		/** Version of this structure */
+		__u16	version;
+		/** Order of the number of threads sharing L2 cache */
+		__u32	l2_cat_shift;
+		/** Order of the number of threads sharing L3 cache */
+		__u32	l3_cat_shift;
+		/** IDs of LAPICs of all threads */
+		__u8	lapic_ids[ACRN_PLATFORM_LAPIC_IDS_MAX];
+		/** Reserved for alignment and should be 0 */
+		__u8	reserved[52];
+	} hw;
 
-    /** version of this structure */
-    uint16_t version;
+	struct {
+		/** Maximum number of vCPU of a VM */
+		__u16	max_vcpus_per_vm;
+		/** Maximum number of VM */
+		__u16	max_vms;
+		/** Size of configuration of a VM */
+		__u32	vm_config_size;
 
-    /** Align the size of version & hardware info to 128Bytes. */
-    uint8_t reserved0[124];
-
-    /** Configuration Information */
-    /** Maximum vCPU number for one VM. */
-    uint16_t max_vcpus_per_vm;
-
-    /** Maximum Kata container number in SOS VM */
-    uint8_t max_kata_containers;
-
-    uint8_t reserved1[7];
-
-    /** Number of configured VMs */
-    uint16_t max_vms;
-
-    /**
-     * The size of acrn_vm_config is various on different platforms.
-     * This is the size of this struct which is used for the caller
-     * to parse the vm_configs array.
-     */
-    uint32_t vm_config_entry_size;
-
-    /**
-     * Address to an array of struct acrn_vm_config, containing all
-     * the configurations of all VMs. VHM treats it as an opague data
-     * structure.
-     *                                    *
-     * The size of one array element is vm_config_entry_size while
-     * the number of elements is max_vms.
-     */
-    uint64_t vm_configs_addr;
-
-    /** Align the size of Configuration info to 128Bytes. */
-    uint8_t reserved2[104];
-} __attribute__((aligned(8)));
+		/** Memory address which user space provided to
+		 *  store the VM configurations
+		 */
+		void	*vm_configs_addr;
+		/** Maximum number of VM for Kata containers */
+		__u64	max_kata_containers;
+		__u8	reserved[104];
+	} sw;
+};
