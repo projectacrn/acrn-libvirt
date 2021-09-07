@@ -30,7 +30,7 @@
 #define VIR_FROM_THIS VIR_FROM_ACRN
 #define ACRN_DM_PATH            "/usr/bin/acrn-dm"
 #define ACRN_CTL_PATH           "/usr/bin/acrnctl"
-#define ACRN_OFFLINE_PATH       "/sys/class/vhm/acrn_vhm/offline_cpu"
+#define ACRN_OFFLINE_PATH       "/sys/devices/virtual/misc/acrn_hsm/remove_cpu"
 #define SYSFS_CPU_PATH          "/sys/devices/system/cpu"
 #define ACRN_AUTOSTART_DIR      SYSCONFDIR "/libvirt/acrn/autostart"
 #define ACRN_CONFIG_DIR         SYSCONFDIR "/libvirt/acrn"
@@ -184,27 +184,28 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
     }
 
     /* get basic platform info first */
-    if (!pi->vm_configs_addr) {
+    if (!pi->sw.vm_configs_addr) {
         if (acrnGetPlatformInfo(fd, pi) < 0 ||
-            !pi->cpu_num || !pi->max_vms || !pi->vm_config_entry_size) {
+            !pi->sw.max_vms || !pi->sw.vm_config_size) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("acrnGetPlatformInfo failed"));
+                           _("acrnGetPlatformInfo first time failed"));
+            VIR_DEBUG("acrnGetPlatformInfo:max_vms=0x%x\n", pi->sw.max_vms);
             ret = -EINVAL;
             goto cleanup;
         }
 
-        if (pi->version != ACRN_PI_VERSION) {
+        if (pi->hw.version != ACRN_PI_VERSION) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            _("ACRN platform version mismatch: "
                              "got 0x%x, expecting 0x%x"),
-                           pi->version, ACRN_PI_VERSION);
+                           pi->hw.version, ACRN_PI_VERSION);
             ret = -EOPNOTSUPP;
             goto cleanup;
         }
 
-        if (!(pi->vm_configs_addr = (uint64_t)calloc(
-                                                pi->max_vms,
-                                                pi->vm_config_entry_size))) {
+        if (!(pi->sw.vm_configs_addr = calloc(
+                                                pi->sw.max_vms,
+                                                pi->sw.vm_config_size))) {
             virReportError(VIR_ERR_NO_MEMORY, NULL);
             ret = -ENOMEM;
             goto cleanup;
@@ -215,13 +216,13 @@ acrnGetPlatform(acrnPlatformInfoPtr pi, struct acrnVmList *vmList)
     ret = acrnGetPlatformInfo(fd, pi);
     if (ret < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("acrnGetPlatformInfo failed"));
+                       _("acrnGetPlatformInfo second time failed"));
         goto cleanup;
     }
 
-    for (i = 0, p = (uint8_t *)pi->vm_configs_addr;
-         i < pi->max_vms;
-         i++, p += pi->vm_config_entry_size) {
+    for (i = 0, p = (uint8_t *)pi->sw.vm_configs_addr;
+         i < pi->sw.max_vms;
+         i++, p += pi->sw.vm_config_size) {
         /* drop the hv-specific part of vmcfg */
         memcpy(&vmcfg, p, sizeof(vmcfg));
 
@@ -357,7 +358,7 @@ acrnAllocateVm(virDomainObjListPtr doms, virDomainDefPtr def,
         }
 
         /* clamp cpumask to cpu_num */
-        virBitmapShrink(cpumask, pi->cpu_num);
+        virBitmapShrink(cpumask, pi->hw.cpu_num);
 
         if (!(testmask = virBitmapNew(virBitmapSize(cpumask)))) {
             virReportError(VIR_ERR_NO_MEMORY, NULL);
@@ -497,7 +498,7 @@ acrnAllocateVcpus(acrnPlatformInfoPtr pi, virBitmapPtr pcpus, bool rtvm,
                   size_t maxvcpus, size_t *allocMap, virBitmapPtr vcpus)
 {
     ssize_t pos;
-    uint16_t totalCpus = pi->cpu_num;
+    uint16_t totalCpus = pi->hw.cpu_num;
 
     while (maxvcpus--) {
         uint16_t minAllocated = USHRT_MAX;
@@ -594,7 +595,7 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
 
     if (def->cpumask) {
         /* clamp cpumask to cpu_num */
-        virBitmapShrink(def->cpumask, pi->cpu_num);
+        virBitmapShrink(def->cpumask, pi->hw.cpu_num);
 
         if (!(allowedmask = virBitmapNewCopy(def->cpumask))) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
@@ -614,7 +615,7 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, acrnPlatformInfoPtr pi,
 
     if (priv->cpuAffinitySet)
         virBitmapFree(priv->cpuAffinitySet);
-    if (!(priv->cpuAffinitySet = virBitmapNew(pi->cpu_num))) {
+    if (!(priv->cpuAffinitySet = virBitmapNew(pi->hw.cpu_num))) {
         virReportError(VIR_ERR_NO_MEMORY, NULL);
         goto cleanup;
     }
@@ -2459,7 +2460,7 @@ acrnNodeGetCPUMap(virConnectPtr conn,
     if (online)
         *online = virBitmapCountBits(cpus);
 
-    ret = pi->cpu_num;
+    ret = pi->hw.cpu_num;
 
 cleanup:
     if (ret < 0 && cpumap && *cpumap)
@@ -2482,8 +2483,8 @@ acrnStateCleanup(void)
     virObjectUnref(acrn_driver->xmlopt);
     virObjectUnref(acrn_driver->caps);
     virObjectUnref(acrn_driver->domains);
-    if (acrn_driver->pi.vm_configs_addr) {
-        void *p = (void *)acrn_driver->pi.vm_configs_addr;
+    if (acrn_driver->pi.sw.vm_configs_addr) {
+        void *p = (void *)acrn_driver->pi.sw.vm_configs_addr;
         VIR_FREE(p);
     }
     if (acrn_driver->vcpuAllocMap)
@@ -2622,7 +2623,7 @@ acrnInitPlatform(acrnPlatformInfoPtr pi, virNodeInfoPtr nodeInfo,
     size_t i, *map = NULL;
     int ret;
 
-    totalCpus = pi->cpu_num;
+    totalCpus = pi->hw.cpu_num;
 
     if (!(postLaunchedPcpus = virBitmapNew(totalCpus))) {
         virReportError(VIR_ERR_NO_MEMORY, NULL);
