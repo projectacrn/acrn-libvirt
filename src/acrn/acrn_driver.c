@@ -611,7 +611,6 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     acrnDomainXmlNsDefPtr nsdef;
     struct acrnCmdDeviceData data = { 0 };
     char *pcpus;
-    char uuidstr[VIR_UUID_STRING_BUFLEN];
     size_t i;
 
     if (!vm || !(def = vm->def))
@@ -637,12 +636,6 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     virCommandAddArg(cmd, "-m");
     virCommandAddArgFormat(cmd, "%lluM",
                            VIR_DIV_UP(virDomainDefGetMemoryInitial(def), 1024));
-
-    /* UUID */
-    if (virUUIDIsValid(def->uuid)) {
-        virCommandAddArg(cmd, "-U");
-        virCommandAddArg(cmd, virUUIDFormat(def->uuid, uuidstr));
-    }
 
     /* RTVM */
     if (acrnIsRtvm(def))
