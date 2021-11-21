@@ -2171,7 +2171,7 @@ acrnOfflineCpus(int nprocs)
 {
     ssize_t i = -1;
     int fd;
-    char path[128], chr, online;
+    char path[128], chr, online, cpu_id[4];
     ssize_t rc;
     virBitmapPtr cpus;
 
@@ -2181,7 +2181,8 @@ acrnOfflineCpus(int nprocs)
         if (i == 0)
             continue;
 
-        snprintf(path, sizeof(path), "%s/cpu%ld/online", SYSFS_CPU_PATH, i);
+        snprintf(cpu_id, sizeof(cpu_id), "%ld", i);
+        snprintf(path, sizeof(path), "%s/cpu%s/online", SYSFS_CPU_PATH, cpu_id);
 
         if ((fd = open(path, O_RDWR)) < 0) {
             virReportError(VIR_ERR_OPEN_FAILED, _("%s"), path);
@@ -2211,9 +2212,7 @@ acrnOfflineCpus(int nprocs)
             return -1;
         }
 
-        chr += i;
-
-        if (write(fd, &chr, sizeof(chr)) < sizeof(chr)) {
+        if (write(fd, cpu_id, strlen(cpu_id)) < strlen(cpu_id)) {
             close(fd);
             virReportError(VIR_ERR_WRITE_FAILED, _(ACRN_OFFLINE_PATH));
             return -1;
