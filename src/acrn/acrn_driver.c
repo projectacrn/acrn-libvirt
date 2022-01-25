@@ -26,6 +26,7 @@
 #include "viraccessapicheck.h"
 #include "acrn_driver.h"
 #include "acrn_domain.h"
+#include "acrn_monitor.h"
 
 #define VIR_FROM_THIS VIR_FROM_ACRN
 #define ACRN_DM_PATH            "/usr/bin/acrn-dm"
@@ -35,6 +36,7 @@
 #define ACRN_AUTOSTART_DIR      SYSCONFDIR "/libvirt/acrn/autostart"
 #define ACRN_CONFIG_DIR         SYSCONFDIR "/libvirt/acrn"
 #define ACRN_STATE_DIR          RUNSTATEDIR "/libvirt/acrn"
+#define ACRN_MONITOR_DIR        "/var/lib/libvirt/acrn"
 #define ACRN_NET_GENERATED_TAP_PREFIX   "tap"
 #define ACRN_PI_VERSION         (0x100)
 
@@ -612,6 +614,7 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     struct acrnCmdDeviceData data = { 0 };
     char *pcpus;
     size_t i;
+    char *monitor_path;
 
     if (!vm || !(def = vm->def))
         return NULL;
@@ -689,8 +692,80 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     /* VM name */
     virCommandAddArg(cmd, def->name);
 
+    /* Command monitor */
+    monitor_path = g_strdup_printf("%s/domain-%s/monitor.sock", ACRN_MONITOR_DIR, vm->def->name);
+    virCommandAddArgList(cmd, "--cmd_monitor", monitor_path, NULL);
+
     return cmd;
 }
+
+static int
+acrnProcessPrepareMonitorChr(virDomainChrSourceDefPtr monConfig,
+                             const char *domainDir)
+{
+    monConfig->type = VIR_DOMAIN_CHR_TYPE_UNIX;
+    monConfig->data.nix.listen = true;
+
+    monConfig->data.nix.path = g_strdup_printf("%s/monitor.sock", domainDir);
+    return 0;
+}
+
+static int
+acrnProcessWaitForMonitor(virDomainObjPtr vm, acrnMonitorStopCallback stop)
+{
+    acrnDomainObjPrivatePtr priv = vm->privateData;
+    virDomainChrSourceDefPtr config = priv->monConfig;
+    acrnMonitorPtr mon = NULL;
+
+    if (!priv->libDir)
+        priv->libDir = g_strdup_printf("%s/domain-%s", ACRN_MONITOR_DIR, vm->def->name);
+    if (virFileMakePath(priv->libDir) < 0) {
+	    virReportSystemError(errno,
+			                _("Failed to mkdir %s"),
+			                priv->libDir);
+	    return -1;
+    }
+    if (!(config = virDomainChrSourceDefNew(acrn_driver->xmlopt)))
+        return -1;
+    VIR_DEBUG("Preparing monitor state");
+    if (acrnProcessPrepareMonitorChr(config, priv->libDir) < 0)
+        return -1;
+    VIR_DEBUG("Monitor UNIX socket path:%s", config->data.nix.path);
+
+    mon = acrnMonitorOpen(vm, config, stop);
+
+    priv->mon = mon;
+
+    if (priv->mon == NULL) {
+        VIR_INFO("Failed to connect monitor for %s", vm->def->name);
+        return -1;
+    }
+    VIR_DEBUG("acrnProcessWaitForMonitor:end");
+    return 0;
+}
+
+static virCommandPtr
+acrnRunStartCommand(virDomainObjPtr vm)
+{
+    int ret = -1;
+    virCommandPtr cmd;
+
+    cmd = acrnBuildStartCmd(vm);
+    if (!cmd)
+        return NULL;
+
+    virCommandRawStatus(cmd);
+    ret = virCommandRunAsync(cmd, &vm->pid);
+    if (ret < 0) {
+        virCommandFree(cmd);
+        cmd = NULL;
+        virReportSystemError(errno, "%s", _("virCommandRunAsync failed"));
+    }
+
+    return cmd;
+}
+
+static void acrnProcessStopCallback(virDomainObjPtr vm);
 
 static int
 acrnProcessStart(virDomainObjPtr vm)
@@ -698,30 +773,34 @@ acrnProcessStart(virDomainObjPtr vm)
     virCommandPtr cmd;
     int ret = -1;
 
-    if (!(cmd = acrnBuildStartCmd(vm)))
-        goto cleanup;
-
-    virCommandDaemonize(cmd);
-
     VIR_DEBUG("Starting domain '%s'", vm->def->name);
 
-    if (virCommandRun(cmd, NULL) < 0)
+    cmd = acrnRunStartCommand(vm);
+    if (!cmd)
         goto cleanup;
 
-    /* XXX */
-    if (sscanf(vm->def->name, "vm%d", &vm->def->id) != 1 &&
-        sscanf(vm->def->name, "instance-%d", &vm->def->id) != 1)
-        vm->def->id = 0;
+    vm->def->id = vm->pid;
 
     virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, VIR_DOMAIN_RUNNING_BOOTED);
-    ret = 0;
+
+    VIR_DEBUG("Waiting for monitor to show up");
+    if (acrnProcessWaitForMonitor(vm, &acrnProcessStopCallback) < 0)
+            goto cleanup;
+
+    if (virDomainObjSave(vm, acrn_driver->xmlopt,
+                        ACRN_STATE_DIR) < 0)
+            goto cleanup;
+
+    return 0;
 
 cleanup:
-    virCommandFree(cmd);
-    if (ret < 0) {
-        acrnNetCleanup(vm);
-        acrnTtyCleanup(vm);
+    if (cmd) {
+        virCommandFree(cmd);
     }
+
+    vm->pid = -1;
+    acrnNetCleanup(vm);
+    acrnTtyCleanup(vm);
     return ret;
 }
 static int
@@ -767,36 +846,19 @@ acrnAutostartDomains(acrnConnectPtr driver)
 
     virObjectUnref(conn);
 }
-static virCommandPtr
-acrnBuildStopCmd(virDomainDefPtr def)
-{
-    virCommandPtr cmd;
-
-    if (!def)
-        return NULL;
-
-    if (!(cmd = virCommandNewArgList(ACRN_CTL_PATH, "stop", "-f",
-                                     def->name, NULL)))
-        virReportError(VIR_ERR_NO_MEMORY, NULL);
-
-    return cmd;
-}
 
 static int
-acrnProcessStop(virDomainObjPtr vm, int reason, size_t *allocMap)
+acrnDomainShutdownMonitor(virDomainObjPtr vm)
 {
-    virDomainDefPtr def = vm->def;
-    virCommandPtr cmd;
     acrnDomainObjPrivatePtr priv = vm->privateData;
-    int ret = -1;
 
-    if (!(cmd = acrnBuildStopCmd(def)))
-        goto cleanup;
+    return acrnMonitorSystemPowerdown(priv->mon);
+}
 
-    VIR_DEBUG("Stopping domain '%s'", def->name);
-
-    if (virCommandRun(cmd, NULL) < 0)
-        goto cleanup;
+static void
+acrnProcessCleanup(virDomainObjPtr vm, int reason, size_t *allocMap)
+{
+    acrnDomainObjPrivatePtr priv = vm->privateData;
 
     /* clean up network interfaces */
     acrnNetCleanup(vm);
@@ -804,15 +866,53 @@ acrnProcessStop(virDomainObjPtr vm, int reason, size_t *allocMap)
     /* clean up ttys */
     acrnTtyCleanup(vm);
 
+    acrnMonitorClose(priv->mon);
+    if (priv->monConfig) {
+        if (priv->monConfig->type == VIR_DOMAIN_CHR_TYPE_UNIX)
+            unlink(priv->monConfig->data.nix.path);
+        virObjectUnref(priv->monConfig);
+        priv->monConfig = NULL;
+    }
+
     virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF, reason);
 
-    def->id = -1;
-    ret = 0;
+    vm->pid = -1;
+    vm->def->id = -1;
 
-cleanup:
-    virCommandFree(cmd);
     acrnFreeVcpus(priv->cpuAffinitySet, allocMap);
+    virDomainDeleteConfig(ACRN_STATE_DIR, NULL, vm);
+}
+
+static int
+acrnProcessStop(virDomainObjPtr vm, int reason)
+{
+    virDomainDefPtr def = vm->def;
+    int ret = 0;
+
+    VIR_DEBUG("Stopping domain '%s'", def->name);
+
+    if (acrnDomainShutdownMonitor(vm) < 0) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       _("Fail to stop domain '%s'"), def->name);
+        ret = -1;
+    }
+    virDomainObjSetState(vm, VIR_DOMAIN_SHUTDOWN, reason);
+
     return ret;
+}
+
+static void
+acrnProcessStopCallback(virDomainObjPtr vm)
+{
+    int reason;
+    acrnDomainObjPrivatePtr priv = vm->privateData;
+    acrnMonitorPtr mon = priv->mon;
+
+    VIR_DEBUG("acrnProcessStopCallback '%s'", vm->def->name);
+    reason = acrnMonitorGetReason(mon);
+    acrnProcessCleanup(vm, reason, acrn_driver->vcpuAllocMap);
+    if (!vm->persistent)
+        virDomainObjListRemove(acrn_driver->domains, vm);
 }
 
 static virDomainPtr
@@ -882,9 +982,9 @@ acrnDomainShutdown(virDomainPtr dom)
         goto cleanup;
     }
 
-    if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN,
-                        privconn->vcpuAllocMap) < 0)
+    if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN) < 0) {
         goto cleanup;
+    }
 
     if (!(event = virDomainEventLifecycleNewFromObj(
                     vm,
@@ -893,6 +993,9 @@ acrnDomainShutdown(virDomainPtr dom)
         goto cleanup;
 
     ret = 0;
+
+    if (!vm->persistent)
+        virDomainObjListRemove(privconn->domains, vm);
 
 cleanup:
     if (vm)
@@ -910,7 +1013,7 @@ acrnDomainDestroy(virDomainPtr dom)
     virDomainObjPtr vm;
     virDomainState state;
     virObjectEventPtr event = NULL;
-    int reason, ret = -1;
+    int reason, ret = -1, val = 0;
 
     acrnDriverLock(privconn);
 
@@ -930,9 +1033,7 @@ acrnDomainDestroy(virDomainPtr dom)
             virDomainObjSetState(vm, VIR_DOMAIN_SHUTOFF,
                                  VIR_DOMAIN_SHUTOFF_DESTROYED);
     } else {
-        if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED,
-                            privconn->vcpuAllocMap) < 0)
-            goto cleanup;
+        val = acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED);
     }
 
     event = virDomainEventLifecycleNewFromObj(
@@ -950,7 +1051,7 @@ acrnDomainDestroy(virDomainPtr dom)
     if (!event)
         goto cleanup;
 
-    ret = 0;
+    ret = val;
 
 cleanup:
     if (vm)
@@ -1269,8 +1370,7 @@ acrnDomainCreateXML(virConnectPtr conn,
                     vm,
                     VIR_DOMAIN_EVENT_STARTED,
                     VIR_DOMAIN_EVENT_STARTED_BOOTED))) {
-        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED,
-                        privconn->vcpuAllocMap);
+        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED);
         goto cleanup;
     }
 
@@ -1331,8 +1431,7 @@ acrnDomainCreateWithFlags(virDomainPtr domain, unsigned int flags)
                     VIR_DOMAIN_EVENT_STARTED,
                     VIR_DOMAIN_EVENT_STARTED_BOOTED))) {
         /* domain must be persistent */
-        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED,
-                        privconn->vcpuAllocMap);
+        acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_DESTROYED);
         goto cleanup;
     }
 
@@ -2258,7 +2357,7 @@ acrnPersistentDomainInit(virDomainObjPtr dom, void *opaque)
     acrnConnectPtr driver = opaque;
 
     if (!dom->persistent)
-        return -1;
+        return 0;
 
     event = virDomainEventLifecycleNewFromObj(dom,
                                               VIR_DOMAIN_EVENT_DEFINED,
@@ -2269,7 +2368,33 @@ acrnPersistentDomainInit(virDomainObjPtr dom, void *opaque)
     virObjectEventStateQueue(driver->domainEventState, event);
     return 0;
 }
+struct acrnProcessReconnectData {
+    acrnConnectPtr driver;
+};
+static int
+viracrnProcessReconnect(virDomainObjPtr vm,
+                         void *opaque)
+{
+    int ret = -1;
 
+    if (!virDomainObjIsActive(vm))
+        return 0;
+    VIR_DEBUG("ACRN driver try to reconnect %s\n", vm->def->name);
+
+    if (acrnProcessWaitForMonitor(vm, &acrnProcessStopCallback) < 0)
+        goto cleanup;
+    ret = 0;
+cleanup:
+    return ret;
+}
+static void
+viracrnProcessReconnectAll(acrnConnectPtr driver)
+{
+    struct acrnProcessReconnectData data;
+    data.driver = driver;
+    virDomainObjListForEach(driver->domains, false, viracrnProcessReconnect, &data);
+    return;
+}
 static virDrvStateInitResult
 acrnStateInitialize(bool privileged,
                     const char *root,
@@ -2328,6 +2453,12 @@ acrnStateInitialize(bool privileged,
 			                ACRN_STATE_DIR);
 	    goto cleanup;
     }
+    if (virFileMakePath(ACRN_MONITOR_DIR) < 0) {
+	    virReportSystemError(errno,
+			                _("Failed to mkdir %s"),
+			                ACRN_MONITOR_DIR);
+	    goto cleanup;
+    }
 
     if (virDomainObjListLoadAllConfigs(acrn_driver->domains,
                                        ACRN_STATE_DIR,
@@ -2346,6 +2477,8 @@ acrnStateInitialize(bool privileged,
     if (virDomainObjListForEach(acrn_driver->domains, false,
                                 acrnPersistentDomainInit, acrn_driver) < 0)
         goto cleanup;
+
+    viracrnProcessReconnectAll(acrn_driver);
 
     if (virDriverShouldAutostart(ACRN_STATE_DIR, &autostart) < 0)
         goto cleanup;
