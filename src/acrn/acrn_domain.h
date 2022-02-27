@@ -3,6 +3,7 @@
 
 #include "domain_conf.h"
 #include "acrn_monitor.h"
+#include "acrn_manager.h"
 
 typedef struct _acrnDomainObjPrivate acrnDomainObjPrivate;
 typedef acrnDomainObjPrivate *acrnDomainObjPrivatePtr;
@@ -18,6 +19,10 @@ struct _acrnDomainObjPrivate {
     virDomainChrSourceDefPtr monConfig;
     char *libDir;            /* base path for per-domain files */
     acrnMonitorPtr mon;
+
+    virDomainChrSourceDefPtr mgrConfig;
+    char *mgrDir;
+    acrnManagerPtr mgr;
 };
 
 typedef struct _acrnDomainXmlNsDef acrnDomainXmlNsDef;
