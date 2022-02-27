@@ -27,6 +27,7 @@
 #include "acrn_driver.h"
 #include "acrn_domain.h"
 #include "acrn_monitor.h"
+#include "acrn_manager.h"
 
 #define VIR_FROM_THIS VIR_FROM_ACRN
 #define ACRN_DM_PATH            "/usr/bin/acrn-dm"
@@ -37,6 +38,7 @@
 #define ACRN_CONFIG_DIR         SYSCONFDIR "/libvirt/acrn"
 #define ACRN_STATE_DIR          RUNSTATEDIR "/libvirt/acrn"
 #define ACRN_MONITOR_DIR        "/var/lib/libvirt/acrn"
+#define ACRN_MANAGER_DIR        "/var/lib/life_mngr"
 #define ACRN_NET_GENERATED_TAP_PREFIX   "tap"
 #define ACRN_PI_VERSION         (0x100)
 
@@ -743,7 +745,34 @@ acrnProcessWaitForMonitor(virDomainObjPtr vm, acrnMonitorStopCallback stop)
     VIR_DEBUG("acrnProcessWaitForMonitor:end");
     return 0;
 }
+static int
+acrnProcessWaitForManager(virDomainObjPtr vm, acrnManagerStopCallback stop)
+{
+    acrnDomainObjPrivatePtr priv = vm->privateData;
+    virDomainChrSourceDefPtr config = priv->mgrConfig;
+    acrnManagerPtr mon = NULL;
 
+    if (!priv->mgrDir)
+        priv->mgrDir = g_strdup_printf("%s", ACRN_MANAGER_DIR);
+
+    if (!(config = virDomainChrSourceDefNew(acrn_driver->xmlopt)))
+        return -1;
+
+    if (acrnProcessPrepareMonitorChr(config, priv->mgrDir) < 0)
+        return -1;
+    VIR_DEBUG("Manager UNIX socket path:%s", config->data.nix.path);
+
+    mon = acrnManagerOpen(vm, config, stop);
+
+    priv->mgr = mon;
+
+    if (priv->mgr == NULL) {
+        VIR_INFO("Failed to connect acrn manager for %s", vm->def->name);
+        return -1;
+    }
+    VIR_DEBUG("acrnProcessWaitForManager:end");
+    return 0;
+}
 static virCommandPtr
 acrnRunStartCommand(virDomainObjPtr vm)
 {
@@ -854,6 +883,13 @@ acrnDomainShutdownMonitor(virDomainObjPtr vm)
 
     return acrnMonitorSystemPowerdown(priv->mon);
 }
+static int
+acrnDomainShutdownManager(virDomainObjPtr vm)
+{
+    acrnDomainObjPrivatePtr priv = vm->privateData;
+
+    return acrnManagerSystemPowerdown(priv->mgr);
+}
 
 static void
 acrnProcessCleanup(virDomainObjPtr vm, int reason, size_t *allocMap)
@@ -865,6 +901,14 @@ acrnProcessCleanup(virDomainObjPtr vm, int reason, size_t *allocMap)
 
     /* clean up ttys */
     acrnTtyCleanup(vm);
+
+    acrnManagerClose(priv->mgr);
+    if (priv->mgrConfig) {
+        if (priv->mgrConfig->type == VIR_DOMAIN_CHR_TYPE_UNIX)
+            unlink(priv->mgrConfig->data.nix.path);
+        virObjectUnref(priv->mgrConfig);
+        priv->mgrConfig = NULL;
+    }
 
     acrnMonitorClose(priv->mon);
     if (priv->monConfig) {
@@ -884,6 +928,27 @@ acrnProcessCleanup(virDomainObjPtr vm, int reason, size_t *allocMap)
 }
 
 static int
+acrnProcessShutdown(virDomainObjPtr vm, int reason)
+{
+    virDomainDefPtr def = vm->def;
+    int ret = 0;
+
+    VIR_DEBUG("Waiting for acrn manager");
+    if (acrnProcessWaitForManager(vm, NULL) < 0)
+        return -1;
+
+    VIR_DEBUG("Stopping domain '%s'", def->name);
+    if (acrnDomainShutdownManager(vm) < 0) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                    _("Fail to stop domain '%s'"), def->name);
+        ret = -1;
+    }
+    virDomainObjSetState(vm, VIR_DOMAIN_SHUTDOWN, reason);
+
+    return ret;
+}
+
+static int
 acrnProcessStop(virDomainObjPtr vm, int reason)
 {
     virDomainDefPtr def = vm->def;
@@ -893,7 +958,7 @@ acrnProcessStop(virDomainObjPtr vm, int reason)
 
     if (acrnDomainShutdownMonitor(vm) < 0) {
         virReportError(VIR_ERR_OPERATION_INVALID,
-                       _("Fail to stop domain '%s'"), def->name);
+                    _("Fail to stop domain '%s'"), def->name);
         ret = -1;
     }
     virDomainObjSetState(vm, VIR_DOMAIN_SHUTDOWN, reason);
@@ -982,7 +1047,7 @@ acrnDomainShutdown(virDomainPtr dom)
         goto cleanup;
     }
 
-    if (acrnProcessStop(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN) < 0) {
+    if (acrnProcessShutdown(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN) < 0) {
         goto cleanup;
     }
 
@@ -993,9 +1058,6 @@ acrnDomainShutdown(virDomainPtr dom)
         goto cleanup;
 
     ret = 0;
-
-    if (!vm->persistent)
-        virDomainObjListRemove(privconn->domains, vm);
 
 cleanup:
     if (vm)
