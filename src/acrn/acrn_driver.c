@@ -623,10 +623,6 @@ acrnBuildStartCmd(virDomainObjPtr vm)
 
     priv = vm->privateData;
 
-    /* ACPI */
-    if (def->features[VIR_DOMAIN_FEATURE_ACPI] == VIR_TRISTATE_SWITCH_ON)
-        virCommandAddArg(cmd, "-A");
-
     /* CPU */
     pcpus = virBitmapFormat(priv->cpuAffinitySet);
     virCommandAddArgList(cmd, "--cpu_affinity", pcpus, NULL);
