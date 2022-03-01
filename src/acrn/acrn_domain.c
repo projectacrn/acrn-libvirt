@@ -349,6 +349,8 @@ acrnDomainDefNamespaceFree(void *nsdata)
     if (!nsdef)
         return;
 
+    if (nsdef->cpu_affinity)
+	VIR_FREE(nsdef->cpu_affinity);
     virStringListFreeCount(nsdef->args, nsdef->nargs);
     VIR_FREE(nsdef);
 }
@@ -371,9 +373,9 @@ acrnDomainDefNamespaceParseConfig(acrnDomainXmlNsDefPtr nsdef,
     if (nnodes == 0)
         return 0;
 
-    if (nnodes > 1) {
+    if (nnodes > 2) {
         virReportError(VIR_ERR_XML_ERROR,
-                       _("More than 1 acrn:config nodes"));
+                       _("More than 2 acrn:config nodes"));
         return -1;
     }
 
@@ -381,6 +383,14 @@ acrnDomainDefNamespaceParseConfig(acrnDomainXmlNsDefPtr nsdef,
         if (node->type == XML_ELEMENT_NODE) {
             if (virXMLNodeNameEqual(node, "rtvm"))
                 nsdef->rtvm = true;
+            if (virXMLNodeNameEqual(node, "cpu_affinity")) {
+                nsdef->cpu_affinity = virXMLPropString(node, "value");
+                if (nsdef->cpu_affinity == NULL) {
+                    virReportError(VIR_ERR_XML_ERROR,
+                                   _("No CPU specified in acrn:cpu_affinity"));
+                    return -1;
+                }
+	    }
         }
     }
 
@@ -449,13 +459,18 @@ static void
 acrnDomainDefNamespaceFormatXMLConfig(virBufferPtr buf,
                                       acrnDomainXmlNsDefPtr xmlns)
 {
-    if (!xmlns->rtvm)
+    if (!xmlns->rtvm && !xmlns->cpu_affinity)
         return;
 
     virBufferAddLit(buf, "<acrn:config>\n");
     virBufferAdjustIndent(buf, 2);
 
-    virBufferAddLit(buf, "<acrn:rtvm/>\n");
+    if (xmlns->rtvm)
+	    virBufferAddLit(buf, "<acrn:rtvm/>\n");
+
+    if (xmlns->cpu_affinity)
+        virBufferEscapeString(buf, "<acrn:cpu_affinity value='%s'/>\n",
+                              xmlns->cpu_affinity);
 
     virBufferAdjustIndent(buf, -2);
     virBufferAddLit(buf, "</acrn:config>\n");
