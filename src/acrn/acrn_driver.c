@@ -890,6 +890,13 @@ acrnDomainShutdownManager(virDomainObjPtr vm)
 
     return acrnManagerSystemPowerdown(priv->mgr);
 }
+static int
+acrnDomainRebootManager(virDomainObjPtr vm)
+{
+    acrnDomainObjPrivatePtr priv = vm->privateData;
+
+    return acrnManagerSystemReboot(priv->mgr);
+}
 
 static void
 acrnProcessCleanup(virDomainObjPtr vm, int reason, size_t *allocMap)
@@ -928,7 +935,7 @@ acrnProcessCleanup(virDomainObjPtr vm, int reason, size_t *allocMap)
 }
 
 static int
-acrnProcessShutdown(virDomainObjPtr vm, int reason)
+acrnProcessShutdown(virDomainObjPtr vm, int reason, bool reboot)
 {
     virDomainDefPtr def = vm->def;
     int ret = 0;
@@ -937,13 +944,22 @@ acrnProcessShutdown(virDomainObjPtr vm, int reason)
     if (acrnProcessWaitForManager(vm, NULL) < 0)
         return -1;
 
-    VIR_DEBUG("Stopping domain '%s'", def->name);
-    if (acrnDomainShutdownManager(vm) < 0) {
-        virReportError(VIR_ERR_OPERATION_INVALID,
-                    _("Fail to stop domain '%s'"), def->name);
-        ret = -1;
+    if (reboot) {
+        VIR_DEBUG("Rebooting domain '%s'", def->name);
+        if (acrnDomainRebootManager(vm) < 0) {
+            virReportError(VIR_ERR_OPERATION_INVALID,
+                        _("Fail to reboot domain '%s'"), def->name);
+            ret = -1;
+        }
+    } else {
+        VIR_DEBUG("Stopping domain '%s'", def->name);
+        if (acrnDomainShutdownManager(vm) < 0) {
+            virReportError(VIR_ERR_OPERATION_INVALID,
+                        _("Fail to stop domain '%s'"), def->name);
+            ret = -1;
+        }
+        virDomainObjSetState(vm, VIR_DOMAIN_SHUTDOWN, reason);
     }
-    virDomainObjSetState(vm, VIR_DOMAIN_SHUTDOWN, reason);
 
     return ret;
 }
@@ -1047,7 +1063,7 @@ acrnDomainShutdown(virDomainPtr dom)
         goto cleanup;
     }
 
-    if (acrnProcessShutdown(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN) < 0) {
+    if (acrnProcessShutdown(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN, false) < 0) {
         goto cleanup;
     }
 
@@ -1065,6 +1081,35 @@ cleanup:
     acrnDriverUnlock(privconn);
     if (event)
         virObjectEventStateQueue(privconn->domainEventState, event);
+    return ret;
+}
+
+static int
+acrnDomainReboot(virDomainPtr dom, unsigned int flags)
+{
+    acrnConnectPtr privconn = dom->conn->privateData;
+    virDomainObjPtr vm;
+    int ret = -1;
+
+    acrnDriverLock(privconn);
+
+    if (!(vm = acrnDomObjFromDomain(dom)))
+        goto cleanup;
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       _("domain is not running"));
+        goto cleanup;
+    }
+
+    if (acrnProcessShutdown(vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN, true) < 0) {
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    acrnDriverUnlock(privconn);
     return ret;
 }
 
@@ -2571,6 +2616,7 @@ static virHypervisorDriver acrnHypervisorDriver = {
     .domainLookupByUUID = acrnDomainLookupByUUID, /* 0.0.1 */
     .domainLookupByName = acrnDomainLookupByName, /* 0.0.1 */
     .domainShutdown = acrnDomainShutdown, /* 0.0.1 */
+    .domainReboot = acrnDomainReboot, /* 0.0.1 */
     .domainDestroy = acrnDomainDestroy, /* 0.0.1 */
     .domainIsPersistent = acrnDomainIsPersistent, /* 0.0.1 */
     .domainGetAutostart = acrnDomainGetAutostart, /* 0.0.1 */

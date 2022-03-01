@@ -30,6 +30,7 @@ struct _acrnManagerMessage {
 };
 
 int acrnManagerSystemPowerdown(acrnManagerPtr mon);
+int acrnManagerSystemReboot(acrnManagerPtr mon);
 acrnManagerPtr acrnManagerOpen(virDomainObjPtr vm, virDomainChrSourceDefPtr config, acrnManagerStopCallback cb);
 void acrnManagerClose(acrnManagerPtr mon);
 bool acrnManagerRegister(acrnManagerPtr mon);
