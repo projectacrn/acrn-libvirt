@@ -29,6 +29,7 @@ typedef struct _acrnDomainXmlNsDef acrnDomainXmlNsDef;
 typedef acrnDomainXmlNsDef *acrnDomainXmlNsDefPtr;
 struct _acrnDomainXmlNsDef {
     bool rtvm;
+    char *cpu_affinity;
     size_t nargs;
     char **args;
 };
