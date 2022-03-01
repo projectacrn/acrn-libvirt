@@ -126,6 +126,17 @@ acrnIsRtvm(virDomainDefPtr def)
     return (nsdef && nsdef->rtvm);
 }
 
+static char*
+acrnGetCpuAffinity(virDomainDefPtr def)
+{
+    acrnDomainXmlNsDefPtr nsdef = def->namespaceData;
+
+    if (nsdef)
+        return nsdef->cpu_affinity;
+
+    return NULL;
+}
+
 static int
 acrnAllocateVcpus(virBitmapPtr pcpus, size_t maxvcpus,
                   size_t *allocMap, virBitmapPtr vcpus)
@@ -202,6 +213,10 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, size_t *allocMap)
 
     if (!vm || !(def = vm->def))
         return -1;
+
+    if (acrnGetCpuAffinity(def)) {
+	    return 0;
+    }
 
     priv = vm->privateData;
     if (def->cpumask == NULL || virBitmapIsAllClear(def->cpumask)) {
@@ -629,9 +644,9 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     priv = vm->privateData;
 
     /* CPU */
-    pcpus = virBitmapFormat(priv->cpuAffinitySet);
-    virCommandAddArgList(cmd, "--cpu_affinity", pcpus, NULL);
-    VIR_FREE(pcpus);
+    pcpus = acrnGetCpuAffinity(def);
+    if(pcpus)
+        virCommandAddArgList(cmd, "--cpu_affinity", pcpus, NULL);
 
     /* Memory */
     virCommandAddArg(cmd, "-m");
