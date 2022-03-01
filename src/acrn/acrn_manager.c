@@ -158,6 +158,21 @@ acrnManagerSystemPowerdown(acrnManagerPtr mon)
     return ret;
 }
 
+int
+acrnManagerSystemReboot(acrnManagerPtr mon)
+{
+    int ret;
+    const char *cmd = "user_vm_reboot";
+
+    if (!mon)
+        return -1;
+    VIR_DEBUG("acrnManagerSystemPowerdown: send reboot command");
+
+    ret = acrnManagerCommand(mon, cmd, 60);
+
+    return ret;
+}
+
 static void
 acrnManagerUpdateWatch(acrnManagerPtr mon)
 {
