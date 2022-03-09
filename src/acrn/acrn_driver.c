@@ -656,7 +656,7 @@ acrnBuildStartCmd(virDomainObjPtr vm)
     /* RTVM */
     if (acrnIsRtvm(def))
         virCommandAddArgList(cmd,
-                             "--lapic_pt",
+                             "--rtvm",
                              "--virtio_poll", "1000000",
                              NULL);
 
