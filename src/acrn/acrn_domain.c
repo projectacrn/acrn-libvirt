@@ -445,7 +445,7 @@ acrnDomainDefNamespaceParse(xmlXPathContextPtr ctxt,
         acrnDomainDefNamespaceParseCommandlineArgs(nsdata, ctxt) < 0)
         goto cleanup;
 
-    if (nsdata->rtvm || nsdata->nargs)
+    if (nsdata->rtvm || nsdata->nargs || nsdata->cpu_affinity)
         *data = g_steal_pointer(&nsdata);
 
     ret = 0;
