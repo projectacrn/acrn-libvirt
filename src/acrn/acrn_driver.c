@@ -224,6 +224,65 @@ acrnSetOnlineVcpus(virDomainDefPtr def, virBitmapPtr vcpus)
 }
 
 static int
+acrnSetVcpuAffinityInfo(virDomainObjPtr vm, size_t *allocMap)
+{
+    virDomainDefPtr def;
+    acrnDomainObjPrivatePtr priv;
+    char *src, *token, *str;
+    int ret = 0, i;
+    int apicid;
+
+    if (!vm || !(def = vm->def))
+        return -1;
+
+    src = acrnGetCpuAffinity(def);
+
+    if (VIR_ALLOC_N(str, strlen(src)) < 0) {
+        virReportError(VIR_ERR_NO_MEMORY, NULL);
+        ret = -ENOMEM;
+        goto cleanup;
+    }
+    strcpy(str, src);
+
+    priv = vm->privateData;
+    if (priv->cpuAffinitySet)
+        virBitmapFree(priv->cpuAffinitySet);
+
+
+    if (!(priv->cpuAffinitySet = virBitmapNew(acrn_driver->nodeInfo.cpus))) {
+        virReportError(VIR_ERR_NO_MEMORY, NULL);
+        ret = -ENOMEM;
+        goto cleanup;
+    }
+
+    token = strtok(str, ",");
+    if (token == NULL) {
+        ret = -1;
+        goto cleanup;
+    }
+
+    do {
+        apicid = atoi(token);
+        for (i = 0; i < acrn_driver->nodeInfo.cpus; i++) {
+            if (apicid == acrn_driver->apicidMap[i]) {
+                allocMap[i] += 1;
+                virBitmapSetBit(priv->cpuAffinitySet, i);
+                break;
+            }
+        }
+    } while ((token = strtok(NULL, ",")) != NULL);
+
+    if (!virBitmapIsAllClear(priv->cpuAffinitySet)) {
+        acrnSetOnlineVcpus(def, priv->cpuAffinitySet);
+    }
+cleanup:
+    if (str) {
+        free(str);
+    }
+    return ret;
+}
+
+static int
 acrnSetCpumask(virDomainDefPtr def, size_t *allocMap)
 {
     int ret = 0, i, j, refresh = 1;
@@ -298,6 +357,7 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, size_t *allocMap)
         return -1;
 
     if (acrnGetCpuAffinity(def)) {
+        acrnSetVcpuAffinityInfo(vm, allocMap);
 	    return 0;
     }
 
