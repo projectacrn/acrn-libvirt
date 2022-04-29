@@ -129,6 +129,22 @@ acrnIsRtvm(virDomainDefPtr def)
     return (nsdef && nsdef->rtvm);
 }
 
+static void
+acrnProcessor2Apicid(virBitmapPtr vcpus, virBufferPtr buf)
+{
+    ssize_t pos = -1;
+    bool first = true;
+
+    while ((pos = virBitmapNextSetBit(vcpus, pos)) >= 0) {
+        if(!first) {
+            virBufferAddLit(buf, ",");
+        } else {
+            first = false;
+        }
+        virBufferAsprintf(buf, "%d", acrn_driver->apicidMap[pos]);
+    }
+}
+
 static char*
 acrnGetCpuAffinity(virDomainDefPtr def)
 {
@@ -208,6 +224,70 @@ acrnSetOnlineVcpus(virDomainDefPtr def, virBitmapPtr vcpus)
 }
 
 static int
+acrnSetCpumask(virDomainDefPtr def, size_t *allocMap)
+{
+    int ret = 0, i, j, refresh = 1;
+    size_t *pos = NULL, *used = NULL, max_index, max_used;
+    uint16_t total_cpus = acrn_driver->nodeInfo.cpus;
+
+    if (def->maxvcpus > total_cpus) {
+        def->maxvcpus = total_cpus;
+    }
+
+    if (def->cpumask == NULL &&
+        !(def->cpumask = virBitmapNew(total_cpus))) {
+        virReportError(VIR_ERR_NO_MEMORY, NULL);
+        ret = -ENOMEM;
+        goto cleanup;
+    }
+
+    if (VIR_ALLOC_N(pos, def->maxvcpus) < 0 || VIR_ALLOC_N(used, def->maxvcpus) < 0) {
+        ret = -ENOMEM;
+        goto cleanup;
+    }
+
+    for (i = 0; i < def->maxvcpus; i++) {
+        pos[i] = total_cpus - i - 1;
+        used[i] = allocMap[total_cpus - i -1];
+    }
+
+    for (i = total_cpus - def->maxvcpus; i >= 0 ; i--) {
+        if (refresh) {
+            max_index = 0;
+            max_used = used[0];
+            for (j = 1; j < def->maxvcpus; j++) {
+                if (used[j] > max_used) {
+                    max_index = j;
+                    max_used = used[j];
+                }
+            }
+            refresh = 0;
+        }
+        if (allocMap[i] < max_used) {
+            pos[max_index] = i;
+            used[max_index] = allocMap[i];
+            refresh = 1;
+        }
+    }
+
+    for (i = 0; i < def->maxvcpus; i++) {
+        if (virBitmapSetBit(def->cpumask, pos[i]) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                    _("failed to set bit %ld in cpu mask"), pos[i]);
+            ret = -EINVAL;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    if (pos != NULL)
+        VIR_FREE(pos);
+    if (used != NULL)
+        VIR_FREE(used);
+    return ret;
+}
+
+static int
 acrnProcessPrepareDomain(virDomainObjPtr vm, size_t *allocMap)
 {
     virDomainDefPtr def;
@@ -223,8 +303,10 @@ acrnProcessPrepareDomain(virDomainObjPtr vm, size_t *allocMap)
 
     priv = vm->privateData;
     if (def->cpumask == NULL || virBitmapIsAllClear(def->cpumask)) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, _("cpuset is empty"));
-        goto cleanup;
+        if (acrnSetCpumask(def, allocMap) < 0) {
+                virReportError(VIR_ERR_INTERNAL_ERROR, _("cpuset is empty"));
+                goto cleanup;
+        }
     }
     virBitmapShrink(def->cpumask, acrn_driver->nodeInfo.cpus);
     if (priv->cpuAffinitySet)
@@ -648,8 +730,16 @@ acrnBuildStartCmd(virDomainObjPtr vm)
 
     /* CPU */
     pcpus = acrnGetCpuAffinity(def);
-    if(pcpus)
+    if (pcpus) {
         virCommandAddArgList(cmd, "--cpu_affinity", pcpus, NULL);
+    } else {
+        virBuffer buf = VIR_BUFFER_INITIALIZER;
+
+        virBufferAddLit(&buf, "--cpu_affinity=");
+        acrnProcessor2Apicid(priv->cpuAffinitySet, &buf);
+        virCommandAddArgBuffer(cmd, &buf);
+        virBufferFreeAndReset(&buf);
+    }
 
     /* Memory */
     virCommandAddArg(cmd, "-m");
