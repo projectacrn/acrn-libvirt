@@ -55,6 +55,7 @@ struct _acrnConnect {
     virObjectEventStatePtr domainEventState;
     virHostdevManagerPtr hostdevMgr;
     size_t *vcpuAllocMap;
+    unsigned int *apicidMap;
 };
 
 typedef struct _acrnDomainNamespaceDef acrnDomainNamespaceDef;
@@ -71,6 +72,8 @@ struct acrnAutostartData {
     virConnectPtr conn;
 };
 static acrnConnectPtr acrn_driver = NULL;
+
+#define CPUINFO_PATH "/proc/cpuinfo"
 
 static void
 acrnDriverLock(acrnConnectPtr driver)
@@ -2323,6 +2326,8 @@ acrnStateCleanup(void)
 
     if (acrn_driver->vcpuAllocMap)
         VIR_FREE(acrn_driver->vcpuAllocMap);
+    if (acrn_driver->apicidMap)
+        VIR_FREE(acrn_driver->apicidMap);
     virMutexDestroy(&acrn_driver->lock);
     VIR_FREE(acrn_driver);
 
@@ -2378,6 +2383,110 @@ virAcrnCapsBuild(void)
 error:
     virObjectUnref(caps);
     return NULL;
+}
+static int
+acrnGetPorcessor(char *str) {
+        int processor;
+        char *start = strstr(str, "processor");
+        if (start != NULL) {
+                sscanf(start, "processor\t: %u", &processor);
+                return processor;
+        }
+        return -1;
+}
+static int
+acrnGetApiced(char *str) {
+        int apicid;
+        char *start = strstr(str, "apicid");
+        if (start != NULL) {
+                sscanf(start, "apicid\t\t: %d", &apicid);
+                return apicid;
+        }
+        return -1;
+}
+
+static int
+acrnGetLapicMap(int nprocs, unsigned int **apicidMap)
+{
+#define READ_LEN (128)
+    int fd = -1, ret = 0, i;
+    int pos = 0, len = READ_LEN, total = 0;
+    int processor = -1, apicid = -1;
+    char str[READ_LEN], *token, *next, s[2] = {0xa, 0x0};
+    ssize_t rc;
+    unsigned int *map;
+
+    if (VIR_ALLOC_N(map, nprocs) < 0) {
+        ret = -ENOMEM;
+        goto cleanup;
+    }
+
+    if ((fd = open(CPUINFO_PATH, O_RDONLY)) < 0) {
+            virReportError(VIR_ERR_OPEN_FAILED, _("%s"), CPUINFO_PATH);
+	    ret = -1;
+        goto cleanup;
+    }
+
+    rc = pread(fd, &str[pos], len, 0);
+    do {
+        total += rc;
+        token = strtok(str, s);
+
+        if(processor != -1) {
+            apicid = acrnGetApiced(str);
+        } else {
+            processor = acrnGetPorcessor(str);
+            if (processor >= nprocs)
+                processor = -1;
+        }
+
+        if(processor != -1 && apicid != -1) {
+                map[processor] = apicid;
+                processor = -1;
+                apicid = -1;
+        }
+
+        next = strtok(NULL, s);
+        do {
+            if(processor != -1) {
+                apicid = acrnGetApiced(token);
+            } else {
+                processor = acrnGetPorcessor(token);
+                if (processor >= nprocs)
+                    processor = -1;
+            }
+
+            if(processor != -1 && apicid != -1) {
+                map[processor] = apicid;
+                processor = -1;
+                apicid = -1;
+            }
+            token = next;
+        } while ((next = strtok(NULL, s)) != NULL);
+
+        pos = 0;
+        for (i = len - 1; i > 1; i--) {
+            if (str[i - 1] == 0x0 || str[i-1] == 0x20) {
+                pos = len - i - 1;
+                if (pos != 0) {
+                    memmove(str, &str[i], pos);
+                }
+                len = READ_LEN - pos;
+                break;
+            }
+        }
+    } while ((rc = pread(fd, &str[pos], len, total)) > 0);
+
+    *apicidMap = map;
+
+cleanup:
+    if (fd > 0)
+        close(fd);
+
+    if (ret != 0 && map != NULL) {
+        VIR_FREE(map);
+    }
+    return ret;
 }
 
 /*
@@ -2456,6 +2565,11 @@ acrnInitPlatform(virNodeInfoPtr nodeInfo, size_t **allocMap)
     }
 
     nodeInfo->cpus = totalCpus;
+
+    if (acrnGetLapicMap(nodeInfo->cpus, &acrn_driver->apicidMap) < 0) {
+        ret = -EIO;
+        goto cleanup;
+    }
 
     if (acrnOfflineCpus(nodeInfo->cpus) < 0) {
         ret = -EIO;
