@@ -599,7 +599,7 @@ acrnCommandAddDeviceArg(virDomainDefPtr def,
                 return -1;
 
         virCommandAddArg(cmd, "-s");
-        virCommandAddArgFormat(cmd, "%u:%u:%u,virtio-net,%s,mac=%s",
+        virCommandAddArgFormat(cmd, "%u:%u:%u,virtio-net,tap=%s,mac=%s",
                                info->addr.pci.bus,
                                info->addr.pci.slot,
                                info->addr.pci.function,
