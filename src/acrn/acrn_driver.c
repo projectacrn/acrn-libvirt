@@ -2649,9 +2649,9 @@ acrnOfflineCpus(int nprocs)
     int fd;
     char path[128], chr, online, cpu_id[4];
     ssize_t rc;
-    virBitmapPtr cpus;
+    virBitmapPtr cpus, cpus_bak;
 
-    cpus = virHostCPUGetOnlineBitmap();
+    cpus_bak = cpus = virHostCPUGetOnlineBitmap();
     while ((i = virBitmapNextSetBit(cpus, i)) >= 0 && i < nprocs) {
         /* cpu0 can't be offlined */
         if (i == 0)
@@ -2682,20 +2682,27 @@ acrnOfflineCpus(int nprocs)
             virReportError(VIR_ERR_READ_FAILED, _("%s"), path);
             return -1;
         }
+    }
 
-        if ((fd = open(ACRN_OFFLINE_PATH, O_WRONLY)) < 0) {
-            virReportError(VIR_ERR_OPEN_FAILED, _(ACRN_OFFLINE_PATH));
-            return -1;
-        }
+    if ((fd = open(ACRN_OFFLINE_PATH, O_WRONLY)) < 0) {
+        virReportError(VIR_ERR_OPEN_FAILED, _(ACRN_OFFLINE_PATH));
+        return -1;
+    }
 
+    while ((i = virBitmapNextSetBit(cpus_bak, i)) >= 0 && i < nprocs) {
+        /* cpu0 can't be offlined */
+        if (i == 0)
+            continue;
+
+        snprintf(cpu_id, sizeof(cpu_id), "%ld", i);
         if (write(fd, cpu_id, strlen(cpu_id)) < strlen(cpu_id)) {
             close(fd);
             virReportError(VIR_ERR_WRITE_FAILED, _(ACRN_OFFLINE_PATH));
             return -1;
         }
-
-        close(fd);
     }
+
+    close(fd);
 
     return 0;
 }
