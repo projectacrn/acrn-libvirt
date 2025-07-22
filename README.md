@@ -43,7 +43,10 @@ build directory different than the source directory. For example, to build
 in a manner that is suitable for installing as root, use:
 
 ```
+$ sudo apt install autoconf libtool  libnl-3-dev libnl-genl-3-dev  libnl-route-3-dev  lvm2 libdevmapper-dev  libpciaccess-dev libglib2.0-dev libgnutls28-dev xsltproc
+$ pip install docutils==0.16
 $ mkdir build && cd build
+$ ../autogen.sh --enable-werror=no
 $ ../configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var
 $ make
 $ sudo make install
