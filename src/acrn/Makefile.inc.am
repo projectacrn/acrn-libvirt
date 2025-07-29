@@ -1,0 +1,80 @@
+# vim: filetype=automake
+
+ACRN_DRIVER_SOURCES = \
+	acrn/acrn_common.h \
+	acrn/acrn_driver.h \
+	acrn/acrn_driver.c \
+	acrn/acrn_domain.h \
+	acrn/acrn_domain.c \
+	acrn/acrn_device.h \
+	acrn/acrn_device.c \
+	$(NULL)
+
+DRIVER_SOURCE_FILES += $(addprefix $(srcdir)/,$(ACRN_DRIVER_SOURCES))
+STATEFUL_DRIVER_SOURCE_FILES += $(addprefix $(srcdir)/,$(ACRN_DRIVER_SOURCES))
+
+EXTRA_DIST += $(ACRN_DRIVER_SOURCES)
+
+
+if WITH_ACRN
+noinst_LTLIBRARIES += libvirt_driver_acrn_impl.la
+libvirt_driver_acrn_la_SOURCES =
+libvirt_driver_acrn_la_LIBADD = \
+	libvirt_driver_acrn_impl.la \
+	libvirt.la \
+	$(GLIB_LIBS) \
+	$(NULL)
+mod_LTLIBRARIES += libvirt_driver_acrn.la
+libvirt_driver_acrn_la_LDFLAGS = $(AM_LDFLAGS_MOD_NOUNDEF)
+
+libvirt_driver_acrn_impl_la_CFLAGS = \
+	-I$(srcdir)/access \
+	-I$(builddir)/access \
+	-I$(srcdir)/conf \
+	-I$(srcdir)/hypervisor \
+	$(AM_CFLAGS) \
+	$(NULL)
+libvirt_driver_acrn_impl_la_LDFLAGS = $(AM_LDFLAGS)
+libvirt_driver_acrn_impl_la_LIBADD = -luuid
+libvirt_driver_acrn_impl_la_SOURCES = $(ACRN_DRIVER_SOURCES)
+
+sbin_PROGRAMS += virtacrnd
+
+nodist_conf_DATA += acrn/virtacrnd.conf
+augeas_DATA += acrn/virtacrnd.aug
+augeastest_DATA += acrn/test_virtacrnd.aug
+CLEANFILES += acrn/virtacrnd.aug
+
+virtacrnd_SOURCES = $(REMOTE_DAEMON_SOURCES)
+nodist_virtacrnd_SOURCES = $(REMOTE_DAEMON_GENERATED)
+virtacrnd_CFLAGS = \
+       $(REMOTE_DAEMON_CFLAGS) \
+       -DDAEMON_NAME="\"virtacrnd\"" \
+       -DMODULE_NAME="\"acrn\"" \
+       $(NULL)
+virtacrnd_LDFLAGS = $(REMOTE_DAEMON_LD_FLAGS)
+virtacrnd_LDADD = $(REMOTE_DAEMON_LD_ADD)
+
+acrn/virtacrnd.conf: remote/libvirtd.conf.in
+	$(AM_V_GEN)$(SED) \
+		-e '/[@]CUT_ENABLE_IP[@]/,/[@]END[@]/d' \
+		-e 's/[@]DAEMON_NAME[@]/virtacrnd/' \
+		$< > $@
+
+acrn/virtacrnd.aug: remote/libvirtd.aug.in
+	$(AM_V_GEN)$(SED) \
+		-e '/[@]CUT_ENABLE_IP[@]/,/[@]END[@]/d' \
+		-e 's/[@]DAEMON_NAME[@]/virtacrnd/' \
+		-e 's/[@]DAEMON_NAME_UC[@]/Virtacrnd/' \
+		$< > $@
+
+acrn/test_virtacrnd.aug: remote/test_libvirtd.aug.in \
+		acrn/virtacrnd.conf $(AUG_GENTEST_SCRIPT)
+	$(AM_V_GEN)$(AUG_GENTEST) acrn/virtacrnd.conf \
+		$(srcdir)/remote/test_libvirtd.aug.in | \
+		$(SED) \
+		-e '/[@]CUT_ENABLE_IP[@]/,/[@]END[@]/d' \
+		-e 's/[@]DAEMON_NAME[@]/virtacrnd/' \
+		-e 's/[@]DAEMON_NAME_UC[@]/Virtacrnd/' \
+		> $@ || rm -f $@
+endif WITH_ACRN
