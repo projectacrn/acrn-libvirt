@@ -232,6 +232,7 @@
         <value>vz</value>
         <value>bhyve</value>
         <value>hvf</value>
+        <value>acrn</value>
       </choice>
     </attribute>
   </define>
