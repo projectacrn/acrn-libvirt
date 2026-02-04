@@ -1482,6 +1482,19 @@ if not get_option('driver_libvirtd').disabled()
   endif
 endif
 
+if not get_option('driver_acrn').disabled() and host_machine.system() == 'linux'
+  acrn_prog = find_program('acrn-dm', required: get_option('driver_acrn'))
+  acrnctl_prog = find_program('acrnctl', required: get_option('driver_acrn'))
+
+  if acrn_prog.found() and acrnctl_prog.found()
+    conf.set('WITH_ACRN', 1)
+    conf.set_quoted('ACRN', acrn_prog.full_path())
+    conf.set_quoted('ACRNCTL', acrnctl_prog.full_path())
+  endif
+elif get_option('driver_acrn').enabled()
+  error('The acrn driver cannot be enabled. ACRN runs only on Intel platform with linux as Service OS.')
+endif
+
 if not get_option('driver_bhyve').disabled() and host_machine.system() == 'freebsd'
   bhyve_prog = find_program('bhyve', required: get_option('driver_bhyve'))
   bhyvectl_prog = find_program('bhyvectl', required: get_option('driver_bhyve'))

@@ -270,6 +270,7 @@ subdir('security')
 subdir('storage')
 subdir('storage_file')
 
+subdir('acrn')
 subdir('bhyve')
 subdir('esx')
 subdir('hyperv')
