@@ -37,11 +37,6 @@ virDomainCaps *virAcrnDomainCapsBuild(acrnConn *conn,
                                        virArch arch,
                                        virDomainVirtType virttype);
 
-/* These are bit flags: */
-typedef enum {
-    ACRN_GRUB_CAP_CONSDEV = 1,
-} virAcrnGrubCapsFlags;
-
 typedef enum {
     ACRN_CAP_RTC_UTC = 1 << 0,
     ACRN_CAP_AHCI32SLOT = 1 << 1,
@@ -55,5 +50,4 @@ typedef enum {
     ACRN_CAP_VIRTIO_9P = 1 << 9,
 } virAcrnCapsFlags;
 
-int virAcrnProbeGrubCaps(virAcrnGrubCapsFlags *caps);
 int virAcrnProbeCaps(unsigned int *caps);

@@ -699,10 +699,6 @@ acrnConnectDomainXMLToNative(virConnectPtr conn,
             return NULL;
         }
     } else {
-        if (!(loadcmd = virAcrnProcessBuildLoadCmd(privconn, def,
-                                                    "<device.map>", NULL)))
-            return NULL;
-
         virCommandToStringBuf(loadcmd, &buf, false, false);
         virBufferAddChar(&buf, '\n');
     }
@@ -1209,9 +1205,6 @@ acrnStateInitialize(bool privileged,
         goto cleanup;
 
     if (virAcrnProbeCaps(&acrn_driver->acrncaps) < 0)
-        goto cleanup;
-
-    if (virAcrnProbeGrubCaps(&acrn_driver->grubcaps) < 0)
         goto cleanup;
 
     if (!(acrn_driver->xmlopt = virAcrnDriverCreateXMLConf(acrn_driver)))

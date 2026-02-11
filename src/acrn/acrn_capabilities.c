@@ -166,32 +166,6 @@ virAcrnDomainCapsBuild(struct _acrnConn *conn,
     return caps;
 }
 
-int
-virAcrnProbeGrubCaps(virAcrnGrubCapsFlags *caps)
-{
-    g_autofree char *binary = NULL;
-    g_autofree char *help = NULL;
-    g_autoptr(virCommand) cmd = NULL;
-    int exit;
-
-    *caps = 0;
-
-    binary = virFindFileInPath("grub-acrn");
-    if (!binary)
-        return 0;
-
-    cmd = virCommandNew(binary);
-    virCommandAddArg(cmd, "--help");
-    virCommandSetOutputBuffer(cmd, &help);
-    if (virCommandRun(cmd, &exit) < 0)
-        return -1;
-
-    if (strstr(help, "--cons-dev") != NULL)
-        *caps |= ACRN_GRUB_CAP_CONSDEV;
-
-    return 0;
-}
-
 static int
 acrnProbeCapsDeviceHelper(unsigned int *caps,
                            char *binary,

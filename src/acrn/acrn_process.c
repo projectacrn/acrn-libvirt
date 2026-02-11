@@ -84,12 +84,6 @@ acrnNetCleanup(virDomainObj *vm)
     }
 }
 
-static void
-virAcrnFormatDevMapFile(const char *vm_name, char **fn_out)
-{
-    *fn_out = g_strdup_printf("%s/grub_acrn-%s-device.map", ACRN_STATE_DIR, vm_name);
-}
-
 static int
 acrnProcessStartHook(struct _acrnConn *driver,
                       virDomainObj *vm,
@@ -172,37 +166,6 @@ virAcrnProcessStartImpl(struct _acrnConn *driver,
     virCommandWriteArgLog(cmd, logfd);
     virCommandSetPidFile(cmd, driver->pidfile);
     virCommandDaemonize(cmd);
-
-    if (vm->def->os.loader == NULL) {
-        /* Now acrn command is constructed, meaning the
-         * domain is ready to be started, so we can build
-         * and execute acrnload command */
-
-        virAcrnFormatDevMapFile(vm->def->name, &devmap_file);
-
-        if (!(load_cmd = virAcrnProcessBuildLoadCmd(driver, vm->def,
-                                                     devmap_file, &devicemap)))
-            goto cleanup;
-        virCommandSetOutputFD(load_cmd, &logfd);
-        virCommandSetErrorFD(load_cmd, &logfd);
-
-        if (devicemap != NULL) {
-            rc = virFileWriteStr(devmap_file, devicemap, 0644);
-            if (rc) {
-                virReportSystemError(errno,
-                                     _("Cannot write device.map '%1$s'"),
-                                     devmap_file);
-                goto cleanup;
-            }
-        }
-
-        /* Log generated command line */
-        virCommandWriteArgLog(load_cmd, logfd);
-
-        VIR_DEBUG("Loading domain '%s'", vm->def->name);
-        if (virCommandRun(load_cmd, NULL) < 0)
-            goto cleanup;
-    }
 
     if (acrnProcessStartHook(driver, vm, VIR_HOOK_ACRN_OP_START) < 0)
         goto cleanup;
