@@ -516,6 +516,9 @@ virshShowVersion(vshControl *ctl G_GNUC_UNUSED)
 #ifdef WITH_BHYVE
     vshPrint(ctl, " Bhyve");
 #endif
+#ifdef WITH_ACRN
+    vshPrint(ctl, " ACRN");
+#endif
 #ifdef WITH_TEST
     vshPrint(ctl, " Test");
 #endif

@@ -2247,6 +2247,7 @@ driver_summary = {
   'Hyper-V': conf.has('WITH_HYPERV'),
   'vz': conf.has('WITH_VZ'),
   'Bhyve': conf.has('WITH_BHYVE'),
+  'Acrn': conf.has('WITH_ACRN'),
   'Test': conf.has('WITH_TEST'),
   'Remote': conf.has('WITH_REMOTE'),
   'Network': conf.has('WITH_NETWORK'),
