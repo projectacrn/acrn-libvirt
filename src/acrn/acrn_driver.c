@@ -684,25 +684,6 @@ acrnConnectDomainXMLToNative(virConnectPtr conn,
     if (acrnDomainAssignAddresses(def, NULL) < 0)
         return NULL;
 
-    if (def->os.bootloader == NULL &&
-        def->os.loader) {
-
-        if (!virDomainDefHasOldStyleROUEFI(def)) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Only read-only pflash is supported."));
-            return NULL;
-        }
-
-        if ((acrnDriverGetAcrnCaps(privconn) & ACRN_CAP_LPC_BOOTROM) == 0) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Installed acrn binary does not support bootrom"));
-            return NULL;
-        }
-    } else {
-        virCommandToStringBuf(loadcmd, &buf, false, false);
-        virBufferAddChar(&buf, '\n');
-    }
-
     if (!(cmd = virAcrnProcessBuildAcrnCmd(privconn, def, true)))
         return NULL;
 

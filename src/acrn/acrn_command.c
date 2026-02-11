@@ -45,7 +45,7 @@ VIR_LOG_INIT("acrn.acrn_command");
 static int
 acrnBuildNetArgStr(const virDomainDef *def,
                     virDomainNetDef *net,
-                    struct _acrnConn *driver,
+                    struct _acrnConn *driver G_GNUC_UNUSED,
                     virCommand *cmd,
                     bool dryRun)
 {
@@ -58,14 +58,6 @@ acrnBuildNetArgStr(const virDomainDef *def,
 
     if (net->model == VIR_DOMAIN_NET_MODEL_VIRTIO) {
         nic_model = g_strdup("virtio-net");
-    } else if (net->model == VIR_DOMAIN_NET_MODEL_E1000) {
-        if ((acrnDriverGetAcrnCaps(driver) & ACRN_CAP_NET_E1000) != 0) {
-            nic_model = g_strdup("e1000");
-        } else {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("NIC model 'e1000' is not supported by given acrn binary"));
-            return -1;
-        }
     } else {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
                        _("NIC model is not supported"));
@@ -158,7 +150,7 @@ acrnBuildConsoleArgStr(const virDomainDef *def, virCommand *cmd)
 static int
 acrnBuildAHCIControllerArgStr(const virDomainDef *def,
                                virDomainControllerDef *controller,
-                               struct _acrnConn *driver,
+                               struct _acrnConn *driver G_GNUC_UNUSED,
                                virCommand *cmd)
 {
     g_auto(virBuffer) buf = VIR_BUFFER_INITIALIZER;
@@ -198,16 +190,10 @@ acrnBuildAHCIControllerArgStr(const virDomainDef *def,
 
         switch (disk->device) {
         case VIR_DOMAIN_DISK_DEVICE_DISK:
-            if ((acrnDriverGetAcrnCaps(driver) & ACRN_CAP_AHCI32SLOT))
-                virBufferAsprintf(&device, ",hd:%s", disk_source);
-            else
-                virBufferAsprintf(&device, "-hd,%s", disk_source);
+            virBufferAsprintf(&device, ",hd:%s", disk_source);
             break;
         case VIR_DOMAIN_DISK_DEVICE_CDROM:
-            if ((acrnDriverGetAcrnCaps(driver) & ACRN_CAP_AHCI32SLOT))
-                virBufferAsprintf(&device, ",cd:%s", disk_source);
-            else
-                virBufferAsprintf(&device, "-cd,%s", disk_source);
+            virBufferAsprintf(&device, ",cd:%s", disk_source);
             break;
         case VIR_DOMAIN_DISK_DEVICE_FLOPPY:
         case VIR_DOMAIN_DISK_DEVICE_LUN:
@@ -399,23 +385,10 @@ acrnBuildGraphicsArgStr(const virDomainDef *def,
     bool escapeAddr;
     unsigned short port;
 
-    if (!(acrnDriverGetAcrnCaps(driver) & ACRN_CAP_LPC_BOOTROM) ||
-        def->os.bootloader ||
-        !def->os.loader) {
+    if (graphics->type != VIR_DOMAIN_GRAPHICS_TYPE_VNC &&
+            graphics->type != VIR_DOMAIN_GRAPHICS_TYPE_SDL) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("Graphics are only supported when booting using UEFI"));
-        return -1;
-    }
-
-    if (!(acrnDriverGetAcrnCaps(driver) & ACRN_CAP_FBUF)) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("Acrn version does not support framebuffer"));
-        return -1;
-    }
-
-    if (graphics->type != VIR_DOMAIN_GRAPHICS_TYPE_VNC) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("Only VNC supported"));
+                       _("Only VNC and SDL are supported"));
         return -1;
     }
 
@@ -424,8 +397,6 @@ acrnBuildGraphicsArgStr(const virDomainDef *def,
                        _("Missing listen element"));
         return -1;
     }
-
-    virBufferAsprintf(&opt, "%d:%d,fbuf", video->info.addr.pci.slot, video->info.addr.pci.function);
 
     switch (glisten->type) {
     case VIR_DOMAIN_GRAPHICS_LISTEN_TYPE_ADDRESS:
@@ -720,26 +691,6 @@ virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
             virCommandAddArg(cmd, "-w");
     }
 
-    switch (def->clock.offset) {
-    case VIR_DOMAIN_CLOCK_OFFSET_LOCALTIME:
-        /* used by default in acrn */
-        break;
-    case VIR_DOMAIN_CLOCK_OFFSET_UTC:
-        if ((acrnDriverGetAcrnCaps(driver) & ACRN_CAP_RTC_UTC) != 0) {
-            virCommandAddArg(cmd, "-u");
-        } else {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Installed acrn binary does not support UTC clock"));
-            return NULL;
-        }
-        break;
-    default:
-         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                        _("unsupported clock offset '%1$s'"),
-                        virDomainClockOffsetTypeToString(def->clock.offset));
-         return NULL;
-    }
-
     /* Clarification about -H and -P flags from Peter Grehan:
      * -H and -P flags force the guest to exit when it executes IA32 HLT and PAUSE
      * instructions respectively.
@@ -755,18 +706,6 @@ virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
     virCommandAddArg(cmd, "-P"); /* vmexit from guest on pause */
 
     virCommandAddArgList(cmd, "-s", "0:0,hostbridge", NULL);
-
-    if (def->os.bootloader == NULL &&
-        def->os.loader) {
-        if ((acrnDriverGetAcrnCaps(driver) & ACRN_CAP_LPC_BOOTROM)) {
-            virCommandAddArg(cmd, "-l");
-            virCommandAddArgFormat(cmd, "bootrom,%s", def->os.loader->path);
-        } else {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Installed acrn binary does not support UEFI loader"));
-            return NULL;
-        }
-    }
 
     /* Devices */
     for (i = 0; i < def->ncontrollers; i++) {

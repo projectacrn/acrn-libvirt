@@ -108,7 +108,7 @@ acrnDomainDefPostParse(virDomainDef *def,
 }
 
 static int
-acrnDomainDiskDefAssignAddress(struct _acrnConn *driver,
+acrnDomainDiskDefAssignAddress(struct _acrnConn *driver G_GNUC_UNUSED,
                                 virDomainDiskDef *def,
                                 const virDomainDef *vmdef G_GNUC_UNUSED)
 {
@@ -125,13 +125,8 @@ acrnDomainDiskDefAssignAddress(struct _acrnConn *driver,
     case VIR_DOMAIN_DISK_BUS_SATA:
         def->info.type = VIR_DOMAIN_DEVICE_ADDRESS_TYPE_DRIVE;
 
-        if ((driver->acrncaps & ACRN_CAP_AHCI32SLOT) != 0) {
-            def->info.addr.drive.controller = idx / 32;
-            def->info.addr.drive.unit = idx % 32;
-        } else {
-            def->info.addr.drive.controller = idx;
-            def->info.addr.drive.unit = 0;
-        }
+        def->info.addr.drive.controller = idx;
+        def->info.addr.drive.unit = 0;
 
         def->info.addr.drive.bus = 0;
         break;

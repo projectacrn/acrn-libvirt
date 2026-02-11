@@ -38,16 +38,10 @@ virDomainCaps *virAcrnDomainCapsBuild(acrnConn *conn,
                                        virDomainVirtType virttype);
 
 typedef enum {
-    ACRN_CAP_RTC_UTC = 1 << 0,
-    ACRN_CAP_AHCI32SLOT = 1 << 1,
-    ACRN_CAP_NET_E1000 = 1 << 2,
-    ACRN_CAP_LPC_BOOTROM = 1 << 3,
-    ACRN_CAP_FBUF = 1 << 4,
-    ACRN_CAP_XHCI = 1 << 5,
-    ACRN_CAP_CPUTOPOLOGY = 1 << 6,
-    ACRN_CAP_SOUND_HDA = 1 << 7,
-    ACRN_CAP_VNC_PASSWORD = 1 << 8,
-    ACRN_CAP_VIRTIO_9P = 1 << 9,
+    ACRN_CAP_XHCI = 1 << 0,
+    ACRN_CAP_CPUTOPOLOGY = 1 << 1,
+    ACRN_CAP_SOUND_HDA = 1 << 2,
+    ACRN_CAP_VNC_PASSWORD = 1 << 3,
 } virAcrnCapsFlags;
 
 int virAcrnProbeCaps(unsigned int *caps);
