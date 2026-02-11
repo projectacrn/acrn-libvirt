@@ -21,8 +21,6 @@ if conf.has('WITH_ACRN')
     ],
     dependencies: [
       access_dep,
-      libkvm_dep,
-      libutil_dep,
       src_dep,
     ],
     include_directories: [

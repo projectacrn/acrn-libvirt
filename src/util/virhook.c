@@ -48,6 +48,7 @@ VIR_ENUM_DECL(virHookLxcOp);
 VIR_ENUM_DECL(virHookNetworkOp);
 VIR_ENUM_DECL(virHookLibxlOp);
 VIR_ENUM_DECL(virHookBhyveOp);
+VIR_ENUM_DECL(virHookAcrnOp);
 
 VIR_ENUM_IMPL(virHookDriver,
               VIR_HOOK_DRIVER_LAST,
@@ -57,6 +58,7 @@ VIR_ENUM_IMPL(virHookDriver,
               "network",
               "libxl",
               "bhyve",
+              "acrn",
 );
 
 VIR_ENUM_IMPL(virHookDaemonOp,
@@ -119,6 +121,15 @@ VIR_ENUM_IMPL(virHookLibxlOp,
 
 VIR_ENUM_IMPL(virHookBhyveOp,
               VIR_HOOK_BHYVE_OP_LAST,
+              "start",
+              "stopped",
+              "prepare",
+              "release",
+              "started",
+);
+
+VIR_ENUM_IMPL(virHookAcrnOp,
+              VIR_HOOK_ACRN_OP_LAST,
               "start",
               "stopped",
               "prepare",

@@ -23,13 +23,9 @@
 #include <config.h>
 
 #include <fcntl.h>
-#include <kvm.h>
 #include <sys/param.h>
 #include <sys/types.h>
-#include <sys/sysctl.h>
 #include <sys/user.h>
-#include <net/if.h>
-#include <net/if_tap.h>
 
 #include "acrn_device.h"
 #include "acrn_driver.h"
@@ -260,13 +256,10 @@ virAcrnProcessStartImpl(struct _acrnConn *driver,
 }
 
 int
-acrnProcessPrepareDomain(acrnConn *driver,
-                          virDomainObj *vm,
-                          unsigned int flags)
+acrnProcessPrepareDomain(acrnConn *driver G_GNUC_UNUSED,
+                          virDomainObj *vm G_GNUC_UNUSED,
+                          unsigned int flags G_GNUC_UNUSED)
 {
-    if (acrnFirmwareFillDomain(driver, vm->def, flags) < 0)
-        return -1;
-
     return 0;
 }
 
@@ -392,6 +385,7 @@ int
 virAcrnGetDomainTotalCpuStats(virDomainObj *vm,
                                unsigned long long *cpustats)
 {
+#if 0
     struct kinfo_proc *kp;
     kvm_t *kd;
     g_autofree char *errbuf = g_new0(char, _POSIX2_LINE_MAX);
@@ -422,17 +416,24 @@ virAcrnGetDomainTotalCpuStats(virDomainObj *vm,
     kvm_close(kd);
 
     return ret;
+#endif
+    (void)vm;
+    (void)cpustats;
+    return -1;
 }
 
+#if 0
 struct acrnProcessReconnectData {
     struct _acrnConn *driver;
     kvm_t *kd;
 };
+#endif
 
 static int
 virAcrnProcessReconnect(virDomainObj *vm,
                          void *opaque)
 {
+#if 0
     struct acrnProcessReconnectData *data = opaque;
     struct kinfo_proc *kp;
     int nprocs;
@@ -488,11 +489,16 @@ virAcrnProcessReconnect(virDomainObj *vm,
     VIR_FREE(expected_proctitle);
 
     return ret;
+#endif
+    (void)vm;
+    (void)opaque;
+    return -1;
 }
 
 void
 virAcrnProcessReconnectAll(struct _acrnConn *driver)
 {
+#if 0
     kvm_t *kd;
     struct acrnProcessReconnectData data;
     g_autofree char *errbuf = g_new0(char, _POSIX2_LINE_MAX);
@@ -511,4 +517,7 @@ virAcrnProcessReconnectAll(struct _acrnConn *driver)
     virDomainObjListForEach(driver->domains, false, virAcrnProcessReconnect, &data);
 
     kvm_close(kd);
+#endif
+    (void)virAcrnProcessReconnect;
+    (void)driver;
 }

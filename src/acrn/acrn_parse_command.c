@@ -23,7 +23,6 @@
  */
 
 #include <config.h>
-#include <libutil.h>
 
 #include "acrn_capabilities.h"
 #include "acrn_command.h"
@@ -103,8 +102,10 @@ acrnParseMemsize(const char *arg, size_t *ret_memsize)
             val *= 1024 * 1024UL;
         *ret_memsize = val;
         error = 0;
+#if 0
     } else {
         error = expand_number(arg, ret_memsize);
+#endif
     }
 
     /* use memory in KiB here */
@@ -374,6 +375,7 @@ acrnParsePCISlot(const char *slotdef,
     case 2:
         /* pcislot[:function] */
         *function = values[1];
+        __attribute__((fallthrough));
     case 1:
         *slot = values[0];
         break;

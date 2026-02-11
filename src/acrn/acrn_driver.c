@@ -1606,7 +1606,7 @@ acrnConnectGetDomainCapabilities(virConnectPtr conn,
     }
 
     if (emulatorbin == NULL)
-        emulatorbin = "/usr/sbin/acrn";
+        emulatorbin = "/usr/bin/acrn-dm";
 
     if (!(caps = virAcrnDomainCapsBuild(conn->privateData, emulatorbin,
                                          machine, arch, virttype)))

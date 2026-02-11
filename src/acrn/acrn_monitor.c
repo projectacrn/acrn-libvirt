@@ -22,7 +22,6 @@
 #include <config.h>
 
 #include <sys/types.h>
-#include <sys/event.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 
@@ -111,6 +110,7 @@ acrnMonitorSetReboot(acrnMonitor *mon)
 static void
 acrnMonitorIO(int watch, int kq, int events G_GNUC_UNUSED, void *opaque)
 {
+#if 0
     const struct timespec zerowait = { 0, 0 };
     acrnMonitor *mon = opaque;
     virDomainObj *vm = mon->vm;
@@ -171,13 +171,16 @@ acrnMonitorIO(int watch, int kq, int events G_GNUC_UNUSED, void *opaque)
             }
         }
     }
+#endif
+    (void)watch;
+    (void)kq;
+    (void)opaque;
 }
 
 static acrnMonitor *
 acrnMonitorOpenImpl(virDomainObj *vm, struct _acrnConn *driver)
 {
     acrnMonitor *mon;
-    struct kevent kev;
 
     if (acrnMonitorInitialize() < 0)
         return NULL;
@@ -190,6 +193,9 @@ acrnMonitorOpenImpl(virDomainObj *vm, struct _acrnConn *driver)
 
     virObjectRef(vm);
     mon->vm = vm;
+
+#if 0
+    struct kevent kev;
 
     mon->kq = kqueue();
     if (mon->kq < 0) {
@@ -204,6 +210,7 @@ acrnMonitorOpenImpl(virDomainObj *vm, struct _acrnConn *driver)
                        _("Unable to register process kevent"));
         goto cleanup;
     }
+#endif
 
     if (!acrnMonitorRegister(mon)) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",

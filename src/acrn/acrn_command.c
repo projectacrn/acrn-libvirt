@@ -38,6 +38,8 @@
 
 #define VIR_FROM_THIS VIR_FROM_ACRN
 
+#define ACRNLOAD "acrnload"
+
 VIR_LOG_INIT("acrn.acrn_command");
 
 static int
