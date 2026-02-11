@@ -675,35 +675,8 @@ virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
 
     /* Memory */
     virCommandAddArg(cmd, "-m");
-    virCommandAddArgFormat(cmd, "%llu",
+    virCommandAddArgFormat(cmd, "%lluM",
                            VIR_DIV_UP(virDomainDefGetMemoryInitial(def), 1024));
-
-    if (def->mem.locked)
-        virCommandAddArg(cmd, "-S"); /* Wire guest memory */
-
-    /* Options */
-    if (def->features[VIR_DOMAIN_FEATURE_ACPI] == VIR_TRISTATE_SWITCH_ON)
-        virCommandAddArg(cmd, "-A"); /* Create an ACPI table */
-    if (def->features[VIR_DOMAIN_FEATURE_APIC] == VIR_TRISTATE_SWITCH_ON)
-        virCommandAddArg(cmd, "-I"); /* Present ioapic to the guest */
-    if (def->features[VIR_DOMAIN_FEATURE_MSRS] == VIR_TRISTATE_SWITCH_ON) {
-        if (def->msrs_features[VIR_DOMAIN_MSRS_UNKNOWN] == VIR_DOMAIN_MSRS_UNKNOWN_IGNORE)
-            virCommandAddArg(cmd, "-w");
-    }
-
-    /* Clarification about -H and -P flags from Peter Grehan:
-     * -H and -P flags force the guest to exit when it executes IA32 HLT and PAUSE
-     * instructions respectively.
-     *
-     * For the HLT exit, acrn uses that to infer that the guest is idling and can
-     * be put to sleep until an external event arrives. If this option is not used,
-     * the guest will always use 100% of CPU on the host.
-     *
-     * The PAUSE exit is most useful when there are large numbers of guest VMs running,
-     * since it forces the guest to exit when it spins on a lock acquisition.
-     */
-    virCommandAddArg(cmd, "-H"); /* vmexit from guest on hlt */
-    virCommandAddArg(cmd, "-P"); /* vmexit from guest on pause */
 
     virCommandAddArgList(cmd, "-s", "0:0,hostbridge", NULL);
 
@@ -772,7 +745,7 @@ virAcrnProcessBuildDestroyCmd(struct _acrnConn *driver G_GNUC_UNUSED,
 {
     virCommand *cmd = virCommandNew(ACRNCTL);
 
-    virCommandAddArgFormat(cmd, "stop -f %s", def->name);
+    virCommandAddArgList(cmd, "stop", "-f", def->name, NULL);
 
     return cmd;
 }
