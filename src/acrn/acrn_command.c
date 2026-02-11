@@ -38,7 +38,10 @@
 
 #define VIR_FROM_THIS VIR_FROM_ACRN
 
-#define ACRNLOAD "acrnload"
+#define ACRN_MONITOR_DIR            "/var/lib/libvirt/acrn"
+#define ACRN_MANAGER_DIR            "/var/lib/life_mngr"
+#define ACRN_CPU_OFFLINE_PATH       "/sys/devices/virtual/misc/acrn_hsm/remove_cpu"
+#define SYSFS_CPU_OFFLINE_PATH      "/sys/devices/system/cpu"
 
 VIR_LOG_INIT("acrn.acrn_command");
 
@@ -824,6 +827,8 @@ virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
         for (i = 0; i < acrncmd->num_args; i++)
             virCommandAddArg(cmd, acrncmd->args[i]);
     }
+
+    virCommandAddArgList(cmd, "--logger_setting", "kmsg,level=3;disk,level=3", NULL);
 
     virCommandAddArg(cmd, def->name);
 
