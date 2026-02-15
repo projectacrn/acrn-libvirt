@@ -220,35 +220,29 @@ acrnBuildUSBControllerArgStr(const virDomainDef *def,
                               virCommand *cmd)
 {
     size_t i;
-    int ndevices = 0;
+    g_auto(virBuffer) opt = VIR_BUFFER_INITIALIZER;
+    int found = 0;
 
-    for (i = 0; i < def->ninputs; i++) {
-        virDomainInputDef *input = def->inputs[i];
+    virBufferAsprintf(&opt, "%d:%d,xhci",
+                      controller->info.addr.pci.slot,
+                      controller->info.addr.pci.function);
 
-        if (input->bus != VIR_DOMAIN_INPUT_BUS_USB) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("only USB input devices are supported"));
-            return -1;
-        }
+    for (i = 0; i < def->nhostdevs; i++) {
+        virDomainHostdevDef *hostdev = def->hostdevs[i];
 
-        if (input->type != VIR_DOMAIN_INPUT_TYPE_TABLET) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("only tablet input devices are supported"));
-            return -1;
-        }
-        ndevices++;
+        if (hostdev->source.subsys.type != VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB)
+            continue;
+
+        virBufferAsprintf(&opt, ",%x-%x",
+                          hostdev->source.subsys.u.usb.bus,
+                          hostdev->source.subsys.u.usb.device);
+        found = 1;
     }
 
-    if (ndevices != 1) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("only single input device is supported"));
-        return -1;
+    if (found) {
+        virCommandAddArg(cmd, "-s");
+        virCommandAddArgBuffer(cmd, &opt);
     }
-
-    virCommandAddArg(cmd, "-s");
-    virCommandAddArgFormat(cmd, "%d:%d,xhci,tablet",
-                           controller->info.addr.pci.slot,
-                           controller->info.addr.pci.function);
 
     return 0;
 }
