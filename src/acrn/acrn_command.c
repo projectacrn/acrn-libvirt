@@ -373,24 +373,17 @@ acrnBuildControllerArgStr(const virDomainDef *def,
 }
 
 static int
-acrnBuildGraphicsArgStr(const virDomainDef *def,
-                         virDomainGraphicsDef *graphics,
-                         virDomainVideoDef *video,
-                         struct _acrnConn *driver,
-                         virCommand *cmd,
-                         bool dryRun)
+acrnBuildGraphicsVNCArgStr(const virDomainDef *def,
+                           virDomainGraphicsDef *graphics,
+                           virDomainVideoDef *video,
+                           struct _acrnConn *driver,
+                           virCommand *cmd,
+                           bool dryRun)
 {
     g_auto(virBuffer) opt = VIR_BUFFER_INITIALIZER;
     virDomainGraphicsListenDef *glisten = NULL;
     bool escapeAddr;
     unsigned short port;
-
-    if (graphics->type != VIR_DOMAIN_GRAPHICS_TYPE_VNC &&
-            graphics->type != VIR_DOMAIN_GRAPHICS_TYPE_SDL) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("Only VNC and SDL are supported"));
-        return -1;
-    }
 
     if (!(glisten = virDomainGraphicsGetListen(graphics, 0))) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
@@ -475,7 +468,61 @@ acrnBuildGraphicsArgStr(const virDomainDef *def,
     virCommandAddArg(cmd, "-s");
     virCommandAddArgBuffer(cmd, &opt);
     return 0;
+}
 
+static int
+acrnBuildGraphicsSDLArgStr(const virDomainDef *def G_GNUC_UNUSED,
+                           virDomainGraphicsDef *graphics,
+                           virDomainVideoDef *video,
+                           struct _acrnConn *driver G_GNUC_UNUSED,
+                           virCommand *cmd,
+                           bool dryRun G_GNUC_UNUSED)
+{
+    g_auto(virBuffer) opt = VIR_BUFFER_INITIALIZER;
+    char *display = graphics->data.sdl.display;
+
+    virBufferAsprintf(&opt, "%x:%x,virtio-gpu,geometry=",
+                      video->info.addr.pci.slot,
+                      video->info.addr.pci.function);
+
+    if (graphics->data.sdl.fullscreen) {
+        virBufferAsprintf(&opt, "fullscreen%s", display ? display : ":0");
+    } else {
+        /* Resolution was specified in video element */
+        virBufferAsprintf(&opt, "%dx%d+0+0",
+                          video->res->x ? video->res->x : 1920,
+                          video->res->y ? video->res->y : 1080);
+    }
+
+    virCommandAddArg(cmd, "-s");
+    virCommandAddArgBuffer(cmd, &opt);
+    return 0;
+}
+
+static int
+acrnBuildGraphicsArgStr(const virDomainDef *def,
+                         virDomainGraphicsDef *graphics,
+                         virDomainVideoDef *video,
+                         struct _acrnConn *driver,
+                         virCommand *cmd,
+                         bool dryRun)
+{
+    switch(graphics->type) {
+    case VIR_DOMAIN_GRAPHICS_TYPE_VNC:
+        return acrnBuildGraphicsVNCArgStr(def, graphics, video, driver, cmd, dryRun);
+    case VIR_DOMAIN_GRAPHICS_TYPE_SDL:
+        return acrnBuildGraphicsSDLArgStr(def, graphics, video, driver, cmd, dryRun);
+    case VIR_DOMAIN_GRAPHICS_TYPE_RDP:
+    case VIR_DOMAIN_GRAPHICS_TYPE_DESKTOP:
+    case VIR_DOMAIN_GRAPHICS_TYPE_SPICE:
+    case VIR_DOMAIN_GRAPHICS_TYPE_EGL_HEADLESS:
+    case VIR_DOMAIN_GRAPHICS_TYPE_DBUS:
+    case VIR_DOMAIN_GRAPHICS_TYPE_LAST:
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s", "Only VNC and SDL are supported");
+        break;
+    }
+
+    return -1;
 }
 
 static int
