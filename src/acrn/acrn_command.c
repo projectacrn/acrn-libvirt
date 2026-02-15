@@ -621,6 +621,45 @@ acrnBuildFSArgStr(const virDomainDef *def G_GNUC_UNUSED,
     return 0;
 }
 
+static int
+acrnBuildPassthroughDevicesArgStr(const virDomainDef *def G_GNUC_UNUSED,
+                                  virDomainHostdevDef *hostdev,
+                                  virCommand *cmd)
+{
+    int ret = -1;
+    virDomainHostdevSubsys *subsys = &hostdev->source.subsys;
+    virDomainHostdevSubsysPCI *pcisrc;
+
+    switch (subsys->type) {
+    case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_PCI:
+        pcisrc = &subsys->u.pci;
+        virCommandAddArg(cmd, "-s");
+        virCommandAddArgFormat(cmd, "%d:%d,passthru,%x/%x/%x",
+                               hostdev->info->addr.pci.slot,
+                               hostdev->info->addr.pci.function,
+                               pcisrc->addr.bus,
+                               pcisrc->addr.slot,
+                               pcisrc->addr.function);
+        ret = 0;
+        break;
+    case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB:
+        /* Do nothing, handled when we process USB controller */
+        ret = 0;
+        break;
+    case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_SCSI:
+    case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_SCSI_HOST:
+    case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_MDEV:
+    case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_LAST:
+    default:
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("unsupported host device type '%s'"),
+                       virDomainHostdevSubsysTypeToString(subsys->type));
+        break;
+    }
+
+    return ret;
+}
+
 virCommand *
 virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
                              bool dryRun)
@@ -705,6 +744,11 @@ virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
                            _("Multiple graphics devices are not supported"));
              return NULL;
         }
+    }
+
+    for (i = 0; i < def->nhostdevs; i++) {
+        if (acrnBuildPassthroughDevicesArgStr(def, def->hostdevs[i], cmd) < 0)
+            return NULL;
     }
 
     for (i = 0; i < def->nsounds; i++) {
