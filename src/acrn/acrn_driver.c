@@ -1185,6 +1185,9 @@ acrnStateInitialize(bool privileged,
     if (!(acrn_driver->caps = virAcrnCapsBuild()))
         goto cleanup;
 
+    if (virAcrnNodePrepare(acrn_driver) < 0)
+        goto cleanup;
+
     if (virAcrnProbeCaps(&acrn_driver->acrncaps) < 0)
         goto cleanup;
 

@@ -701,6 +701,43 @@ acrnBuildPassthroughDevicesArgStr(const virDomainDef *def G_GNUC_UNUSED,
     return ret;
 }
 
+static int
+acrnBuildCpuArgStr(struct _acrnConn *driver,
+                   const virDomainDef *def, virCommand *cmd)
+{
+    g_auto(virBuffer) opt = VIR_BUFFER_INITIALIZER;
+    virBitmap *cpumask;
+    size_t pos = 0;
+    unsigned count = 0;
+    unsigned nvcpus = virDomainDefGetVcpus(def);
+
+    if (def->placement_mode == VIR_DOMAIN_CPU_PLACEMENT_MODE_STATIC) {
+        cpumask = def->cpumask;
+        if (!cpumask) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                           "CPU affinity not specified with static vcpu placement");
+            return -1;
+        }
+
+        while ((pos = virBitmapNextSetBit(cpumask, pos)) != -1) {
+            virBufferAsprintf(&opt, count ? ",%d" : "%d",
+                              driver->host_apicids[pos]);
+            count++;
+            if (count == nvcpus)
+                break;
+        }
+
+        if (count) {
+            virCommandAddArg(cmd, "--cpu_affinity");
+            virCommandAddArgBuffer(cmd, &opt);
+        }
+    } else if (def->placement_mode == VIR_DOMAIN_CPU_PLACEMENT_MODE_AUTO) {
+        /* TODO: Auto placement */
+    }
+
+    return 0;
+}
+
 virCommand *
 virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
                              bool dryRun)
@@ -717,41 +754,10 @@ virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
     size_t i;
     unsigned nusbcontrollers = 0;
     unsigned nisacontrollers = 0;
-    unsigned nvcpus = virDomainDefGetVcpus(def);
 
     /* CPUs */
-    virCommandAddArg(cmd, "-c");
-    if (def->cpu && def->cpu->sockets) {
-        if (def->cpu->dies != 1) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Only 1 die per socket is supported"));
-            return NULL;
-        }
-        if (def->cpu->clusters != 1) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Only 1 cluster per die is supported"));
-            return NULL;
-        }
-        if (nvcpus != def->cpu->sockets * def->cpu->cores * def->cpu->threads) {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Invalid CPU topology: total number of vCPUs must equal the product of sockets, cores, and threads"));
-            return NULL;
-        }
-
-        if ((acrnDriverGetAcrnCaps(driver) & ACRN_CAP_CPUTOPOLOGY) != 0) {
-            virCommandAddArgFormat(cmd, "cpus=%d,sockets=%d,cores=%d,threads=%d",
-                                   nvcpus,
-                                   def->cpu->sockets,
-                                   def->cpu->cores,
-                                   def->cpu->threads);
-        } else {
-            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                           _("Installed acrn binary does not support defining CPU topology"));
-            return NULL;
-        }
-    } else {
-        virCommandAddArgFormat(cmd, "%d", nvcpus);
-    }
+    if (acrnBuildCpuArgStr(driver, def, cmd) < 0)
+        return NULL;
 
     /* Memory */
     virCommandAddArg(cmd, "-m");

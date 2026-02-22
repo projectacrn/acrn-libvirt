@@ -45,3 +45,4 @@ typedef enum {
 } virAcrnCapsFlags;
 
 int virAcrnProbeCaps(unsigned int *caps);
+int virAcrnNodePrepare(acrnConn *conn);

@@ -35,6 +35,8 @@
 #define ACRN_STATE_DIR        RUNSTATEDIR "/libvirt/acrn"
 #define ACRN_LOG_DIR          LOCALSTATEDIR "/log/libvirt/acrn"
 
+#define ACRN_MAX_SUPPORTED_CPU 256
+
 typedef struct _virAcrnDriverConfig virAcrnDriverConfig;
 struct _virAcrnDriverConfig {
     virObject parent;
@@ -64,6 +66,8 @@ struct _acrnConn {
 
     unsigned acrncaps;
     unsigned grubcaps;
+
+    int host_apicids[ACRN_MAX_SUPPORTED_CPU];
 };
 
 typedef struct _acrnConn acrnConn;

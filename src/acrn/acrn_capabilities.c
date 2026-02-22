@@ -40,6 +40,49 @@
 
 VIR_LOG_INIT("acrn.acrn_capabilities");
 
+static int
+acrnGetApicIDs(int *output, int nmax)
+{
+#define CPU_INFO_PROCFS "/proc/cpuinfo"
+    FILE *f;
+    char line[512];
+    int processor = 0, apicid = -1;
+    f = fopen(CPU_INFO_PROCFS, "r");
+    if (!f) {
+        virReportError(VIR_ERR_OPEN_FAILED, "Failed to open %s",
+                       CPU_INFO_PROCFS);
+        return -1;
+    }
+
+    while (fgets(line, sizeof(line), f)) {
+        if (!STRPREFIX(line, "apicid"))
+            continue;
+        if (sscanf(line, "apicid : %u", &apicid) <= 0)
+            continue;
+        output[processor++] = apicid;
+        if (processor >= nmax)
+            break;
+    }
+
+    fclose(f);
+    return 0;
+}
+
+/* This function gets called when connected */
+int
+virAcrnNodePrepare(acrnConn *conn)
+{
+    int ret;
+
+    ret = acrnGetApicIDs(conn->host_apicids, ACRN_MAX_SUPPORTED_CPU);
+    if (ret < 0)
+        goto out;
+
+    /* Add more preparation actions here. */
+
+out:
+    return ret;
+}
 
 virCaps *
 virAcrnCapsBuild(void)
@@ -113,7 +156,6 @@ virAcrnDomainCapsFill(virDomainCaps *caps,
 
     return 0;
 }
-
 
 virDomainCaps *
 virAcrnDomainCapsBuild(struct _acrnConn *conn,
