@@ -57,6 +57,7 @@ acrnBuildNetArgStr(const virDomainDef *def,
     char *brname = NULL;
     char *nic_model = NULL;
     int ret = -1;
+    int tapfd = -1;
     virDomainNetType actualType = virDomainNetGetActualType(net);
 
     if (net->model == VIR_DOMAIN_NET_MODEL_VIRTIO) {
@@ -78,39 +79,31 @@ acrnBuildNetArgStr(const virDomainDef *def,
 
     if (!dryRun) {
         if (virNetDevTapCreateInBridgePort(brname, &net->ifname, &net->mac,
-                                           def->uuid, NULL, NULL, 0,
+                                           def->uuid, NULL, &tapfd, 1,
                                            virDomainNetGetActualVirtPortProfile(net),
                                            virDomainNetGetActualVlan(net),
                                            virDomainNetGetActualPortOptionsIsolated(net),
-                                           NULL, 0, NULL,
+                                           NULL, net->mtu, NULL,
                                            VIR_NETDEV_TAP_CREATE_IFUP | VIR_NETDEV_TAP_CREATE_PERSIST) < 0) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "failed to create tap device");
             goto cleanup;
         }
 
-        realifname = virNetDevTapGetRealDeviceName(net->ifname);
-
-        if (realifname == NULL)
-            goto cleanup;
-
-        VIR_DEBUG("%s -> %s", net->ifname, realifname);
-        /* hack on top of other hack: we need to set
-         * interface to 'UP' again after re-opening to find its
-         * name
-         */
-        if (virNetDevSetOnline(net->ifname, true) != 0)
-            goto cleanup;
+        realifname = g_strdup(net->ifname);
     } else {
         realifname = g_strdup("tap0");
     }
 
 
     virCommandAddArg(cmd, "-s");
-    virCommandAddArgFormat(cmd, "%d:0,%s,%s,mac=%s",
+    virCommandAddArgFormat(cmd, "%d:0,%s,tap=%s,mac=%s",
                            net->info.addr.pci.slot, nic_model,
                            realifname, virMacAddrFormat(&net->mac, macaddr));
 
     ret = 0;
  cleanup:
+    if (tapfd >= 0)
+        VIR_FORCE_CLOSE(tapfd);
     if (ret < 0)
         VIR_FREE(net->ifname);
     VIR_FREE(brname);
