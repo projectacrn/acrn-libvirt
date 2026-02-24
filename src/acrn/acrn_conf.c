@@ -57,7 +57,7 @@ virAcrnDriverConfigNew(void)
     if (!(cfg = virObjectNew(virAcrnDriverConfigClass)))
         return NULL;
 
-    cfg->firmwareDir = g_strdup(DATADIR "/uefi-firmware");
+    cfg->firmwareDir = g_strdup(DATADIR "/acrn/bios");
 
     return cfg;
 }

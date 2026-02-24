@@ -34,7 +34,7 @@
 VIR_LOG_INIT("acrn.acrn_firmware");
 
 
-#define ACRN_DEFAULT_FIRMWARE  "ACRN_UEFI.fd"
+#define ACRN_DEFAULT_FIRMWARE  "OVMF.fd"
 
 int
 acrnFirmwareFillDomain(acrnConn *driver,

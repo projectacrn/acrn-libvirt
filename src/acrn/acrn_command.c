@@ -767,6 +767,12 @@ virAcrnProcessBuildAcrnCmd(struct _acrnConn *driver, virDomainDef *def,
     virCommandAddArgFormat(cmd, "%lluM",
                            VIR_DIV_UP(virDomainDefGetMemoryInitial(def), 1024));
 
+    /* OVMF */
+    if (def->os.bootloader == NULL && def->os.loader) {
+        virCommandAddArg(cmd, "--ovmf");
+        virCommandAddArgFormat(cmd, "%s", def->os.loader->path);
+    }
+
     virCommandAddArgList(cmd, "-s", "0:0,hostbridge", NULL);
 
     /* Devices */
