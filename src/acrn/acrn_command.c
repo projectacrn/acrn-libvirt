@@ -130,22 +130,31 @@ acrnBuildConsoleArgStr(const virDomainDef *def, virCommand *cmd)
 
     chr = def->serials[0];
 
-    if (chr->source->type != VIR_DOMAIN_CHR_TYPE_NMDM) {
+    if (chr->source->type != VIR_DOMAIN_CHR_TYPE_PTY &&
+        chr->source->type != VIR_DOMAIN_CHR_TYPE_DEV &&
+        chr->source->type != VIR_DOMAIN_CHR_TYPE_TCP &&
+        chr->source->type != VIR_DOMAIN_CHR_TYPE_STDIO) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("only nmdm console types are supported"));
+                       _("only pty, dev, stdio and tcp serial source types are supported"));
         return -1;
     }
 
-    /* acrn supports only two ports: com1 and com2 */
-    if (chr->target.port > 2) {
+    if (chr->target.port > 4) {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("only two serial ports are supported"));
+                       _("only four serial ports are supported"));
         return -1;
     }
 
     virCommandAddArg(cmd, "-l");
-    virCommandAddArgFormat(cmd, "com%d,%s",
-                           chr->target.port + 1, chr->source->data.file.path);
+    if (chr->source->type == VIR_DOMAIN_CHR_TYPE_STDIO) {
+        virCommandAddArgFormat(cmd, "com%d,stdio", chr->target.port + 1);
+    } else if (chr->source->type == VIR_DOMAIN_CHR_TYPE_TCP) {
+        virCommandAddArgFormat(cmd, "com%d,tcp:%s", chr->target.port + 1,
+                chr->source->data.tcp.service);
+    } else {
+        virCommandAddArgFormat(cmd, "com%d,%s",
+                chr->target.port + 1, chr->source->data.file.path);
+    }
 
     return 0;
 }
