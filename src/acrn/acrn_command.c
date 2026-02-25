@@ -40,8 +40,6 @@
 
 #define ACRN_MONITOR_DIR            "/var/lib/libvirt/acrn"
 #define ACRN_MANAGER_DIR            "/var/lib/life_mngr"
-#define ACRN_CPU_OFFLINE_PATH       "/sys/devices/virtual/misc/acrn_hsm/remove_cpu"
-#define SYSFS_CPU_OFFLINE_PATH      "/sys/devices/system/cpu"
 
 VIR_LOG_INIT("acrn.acrn_command");
 

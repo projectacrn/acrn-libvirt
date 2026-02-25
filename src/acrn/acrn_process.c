@@ -218,12 +218,86 @@ virAcrnProcessStartImpl(struct _acrnConn *driver,
     return ret;
 }
 
+static void
+acrnOfflineSingleCPU(int cpu)
+{
+#define ACRN_CPU_OFFLINE_PATH       "/sys/devices/virtual/misc/acrn_hsm/remove_cpu"
+#define SYSFS_CPU_OFFLINE_PATH      "/sys/devices/system/cpu"
+    char *path, *content;
+
+    VIR_INFO("Offlining cpu%d from Service OS", cpu);
+    path = g_strdup_printf("%s/cpu%d/online", SYSFS_CPU_OFFLINE_PATH, cpu);
+    if (virFileWriteStr(path, "0", 0) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "Failed to offline cpu%d from Service OS", cpu);
+        goto out;
+    }
+
+    VIR_INFO("Offlining vcpu%d from Service VM", cpu);
+    content = g_strdup_printf("%d", cpu);
+    if (virFileWriteStr(ACRN_CPU_OFFLINE_PATH, content, 0) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "Failed to offline vcpu%d from Service VM", cpu);
+    }
+
+    VIR_FREE(content);
+out:
+    VIR_FREE(path);
+}
+
+static int
+acrnOfflineCPUs(acrnConn *driver G_GNUC_UNUSED, virDomainObj *vm)
+{
+    g_autoptr(virBitmap) online = NULL;
+    g_autoptr(virBitmap) cpumask = NULL;
+    ssize_t i = -1;
+
+    online = virHostCPUGetOnlineBitmap();
+    if (online == NULL) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "failed to get host online cpu bitmap");
+        return -1;
+    }
+
+    cpumask = virBitmapNewCopy(vm->def->cpumask);
+    /* cpumask -= online */
+    virBitmapSubtract(cpumask, online);
+
+    while ((i = virBitmapNextSetBit(cpumask, i)) != -1) {
+        /* cpu0 cannot be offlined */
+        if (i > 0)
+            acrnOfflineSingleCPU(i);
+    }
+
+    return 0;
+}
+
+static bool
+acrnVMIsLapicPT(virDomainObj *vm G_GNUC_UNUSED)
+{
+    /* FIXME: To be implemented
+     *
+     * We need to be careful when specifying lapic pt,
+     * as /proc/cpuinfo will no longer contain APIC ID
+     * of CPUs that are offlined.
+     *
+     * We will read /proc/cpuinfo upon daemon initialization
+     * and record all APIC IDs in an array (acrnGetApicIDs).
+     * This means that we MUST have all CPUs online when
+     * we run libvirt acrn daemon.
+     */
+    return false;
+}
+
 int
-acrnProcessPrepareDomain(acrnConn *driver G_GNUC_UNUSED,
-                          virDomainObj *vm G_GNUC_UNUSED,
+acrnProcessPrepareDomain(acrnConn *driver,
+                          virDomainObj *vm,
                           unsigned int flags G_GNUC_UNUSED)
 {
-    return 0;
+    int ret = 0;
+
+    if (acrnVMIsLapicPT(vm)) {
+        ret = acrnOfflineCPUs(driver, vm);
+    }
+
+    return ret;
 }
 
 int
