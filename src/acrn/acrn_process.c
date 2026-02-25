@@ -268,11 +268,10 @@ virAcrnProcessStop(struct _acrnConn *driver,
         return -1;
     }
 
-    if (!(cmd = virAcrnProcessBuildDestroyCmd(driver, vm->def)))
-        return -1;
-
-    if (virCommandRun(cmd, NULL) < 0)
-        goto cleanup;
+    if (reason != VIR_DOMAIN_SHUTOFF_SHUTDOWN) {
+        /* VIR_DOMAIN_SHUTOFF_SHUTDOWN means guest shut itself down. */
+        virAcrnProcessShutdown(vm);
+    }
 
     if ((priv != NULL) && (priv->mon != NULL))
          acrnMonitorClose(priv->mon);
@@ -301,7 +300,6 @@ virAcrnProcessStop(struct _acrnConn *driver,
 
     acrnProcessStopHook(driver, vm, VIR_HOOK_ACRN_OP_RELEASE);
 
- cleanup:
     virPidFileDelete(ACRN_STATE_DIR, vm->def->name);
     virDomainDeleteConfig(ACRN_STATE_DIR, NULL, vm);
 
@@ -318,10 +316,7 @@ virAcrnProcessShutdown(virDomainObj *vm)
         return -1;
     }
 
-    /* Acrn tries to perform ACPI shutdown when it receives
-     * SIGTERM signal. So we just issue SIGTERM here and rely
-     * on the acrn monitor to clean things up if process disappears.
-     */
+    /* ACRN handles SIGTERM and exits gracefully */
     if (virProcessKill(vm->pid, SIGTERM) != 0) {
         VIR_WARN("Failed to terminate acrn process for VM '%s': %s",
                  vm->def->name, virGetLastErrorMessage());
@@ -385,23 +380,15 @@ virAcrnGetDomainTotalCpuStats(virDomainObj *vm,
     return -1;
 }
 
-#if 0
 struct acrnProcessReconnectData {
     struct _acrnConn *driver;
-    kvm_t *kd;
 };
-#endif
 
 static int
 virAcrnProcessReconnect(virDomainObj *vm,
                          void *opaque)
 {
-#if 0
     struct acrnProcessReconnectData *data = opaque;
-    struct kinfo_proc *kp;
-    int nprocs;
-    char **proc_argv;
-    char *expected_proctitle = NULL;
     acrnDomainObjPrivate *priv = vm->privateData;
     int ret = -1;
 
@@ -413,26 +400,10 @@ virAcrnProcessReconnect(virDomainObj *vm,
 
     virObjectLock(vm);
 
-    kp = kvm_getprocs(data->kd, KERN_PROC_PID, vm->pid, &nprocs);
-    if (kp == NULL || nprocs != 1)
+    priv->mon = acrnMonitorOpen(vm, data->driver);
+    if (!priv->mon) {
+        ret = -1;
         goto cleanup;
-
-    expected_proctitle = g_strdup_printf("acrn: %s", vm->def->name);
-
-    proc_argv = kvm_getargv(data->kd, kp, 0);
-    if (proc_argv && proc_argv[0]) {
-         if (STREQ(expected_proctitle, proc_argv[0])) {
-             ret = 0;
-             priv->mon = acrnMonitorOpen(vm, data->driver);
-             if (vm->def->ngraphics == 1 &&
-                 vm->def->graphics[0]->type == VIR_DOMAIN_GRAPHICS_TYPE_VNC) {
-                 int vnc_port = vm->def->graphics[0]->data.vnc.port;
-                 if (virPortAllocatorSetUsed(vnc_port) < 0) {
-                     VIR_WARN("Failed to mark VNC port '%d' as used by '%s'",
-                              vnc_port, vm->def->name);
-                 }
-             }
-         }
     }
 
  cleanup:
@@ -449,38 +420,14 @@ virAcrnProcessReconnect(virDomainObj *vm,
     }
 
     virObjectUnlock(vm);
-    VIR_FREE(expected_proctitle);
 
     return ret;
-#endif
-    (void)vm;
-    (void)opaque;
-    return -1;
 }
 
 void
 virAcrnProcessReconnectAll(struct _acrnConn *driver)
 {
-#if 0
-    kvm_t *kd;
     struct acrnProcessReconnectData data;
-    g_autofree char *errbuf = g_new0(char, _POSIX2_LINE_MAX);
-
-    if ((kd = kvm_openfiles(NULL, NULL, NULL, O_RDONLY, errbuf)) == NULL) {
-        virReportError(VIR_ERR_SYSTEM_ERROR,
-                       _("Unable to get kvm descriptor: %1$s"),
-                       errbuf);
-        return;
-
-    }
-
     data.driver = driver;
-    data.kd = kd;
-
     virDomainObjListForEach(driver->domains, false, virAcrnProcessReconnect, &data);
-
-    kvm_close(kd);
-#endif
-    (void)virAcrnProcessReconnect;
-    (void)driver;
 }

@@ -24,6 +24,8 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include "acrn_domain.h"
 #include "acrn_monitor.h"
@@ -43,7 +45,7 @@ struct _acrnMonitor {
 
     struct _acrnConn *driver;
     virDomainObj *vm;
-    int kq;
+    int fd;
     int watch;
     bool reboot;
 };
@@ -55,7 +57,7 @@ acrnMonitorDispose(void *obj)
 {
     acrnMonitor *mon = obj;
 
-    VIR_FORCE_CLOSE(mon->kq);
+    VIR_FORCE_CLOSE(mon->fd);
     virObjectUnref(mon->vm);
 }
 
@@ -76,9 +78,8 @@ static bool
 acrnMonitorRegister(acrnMonitor *mon)
 {
     virObjectRef(mon);
-    mon->watch = virEventAddHandle(mon->kq,
+    mon->watch = virEventAddHandle(mon->fd,
                                    VIR_EVENT_HANDLE_READABLE |
-                                   VIR_EVENT_HANDLE_ERROR |
                                    VIR_EVENT_HANDLE_HANGUP,
                                    acrnMonitorIO,
                                    mon,
@@ -108,79 +109,46 @@ acrnMonitorSetReboot(acrnMonitor *mon)
 }
 
 static void
-acrnMonitorIO(int watch, int kq, int events G_GNUC_UNUSED, void *opaque)
+acrnMonitorIO(int watch, int fd, int events, void *opaque)
 {
-#if 0
-    const struct timespec zerowait = { 0, 0 };
     acrnMonitor *mon = opaque;
     virDomainObj *vm = mon->vm;
     struct _acrnConn *driver = mon->driver;
-    const char *name;
-    struct kevent kev;
-    int rc, status;
 
-    if (watch != mon->watch || kq != mon->kq) {
+    if (watch != mon->watch || fd != mon->fd) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("event from unexpected fd %1$d!=%2$d / watch %3$d!=%4$d"),
-                       mon->kq, kq, mon->watch, watch);
+                       mon->fd, fd, mon->watch, watch);
         return;
     }
 
-    rc = kevent(kq, NULL, 0, &kev, 1, &zerowait);
-    if (rc < 0) {
-        virReportSystemError(errno, "%s", _("Unable to query kqueue"));
-        return;
-    }
+    /* pidfd exists on kernel >= 5.3 and waitid on pidfd on kernel >= 5.4 */
+    if (events & (VIR_EVENT_HANDLE_READABLE | VIR_EVENT_HANDLE_HANGUP)) {
+        /* acrn-dm process has exited */
 
-    if (rc == 0)
-        return;
-
-    if ((kev.flags & EV_ERROR) != 0) {
-        virReportSystemError(kev.data, "%s", _("Unable to query kqueue"));
-        return;
-    }
-
-    if (kev.filter == EVFILT_PROC && (kev.fflags & NOTE_EXIT) != 0) {
-        if ((pid_t)kev.ident != vm->pid) {
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("event from unexpected proc %1$ju!=%2$ju"),
-                           (uintmax_t)vm->pid, (uintmax_t)kev.ident);
-            return;
-        }
-
-        name = vm->def->name;
-        status = kev.data;
-        if (WIFSIGNALED(status) && WCOREDUMP(status)) {
-            virReportError(VIR_ERR_INTERNAL_ERROR,
-                           _("Guest %1$s got signal %2$d and crashed"),
-                           name, WTERMSIG(status));
-            virAcrnProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_CRASHED);
-        } else if (WIFEXITED(status)) {
-            if (WEXITSTATUS(status) == 0 || mon->reboot) {
-                /* 0 - reboot */
-                VIR_INFO("Guest %s rebooted; restarting domain.", name);
-                virAcrnProcessRestart(driver, vm);
-            } else if (WEXITSTATUS(status) < 3) {
-                /* 1 - shutdown, 2 - halt, 3 - triple fault. others - error */
-                VIR_INFO("Guest %s shut itself down; destroying domain.", name);
-                virAcrnProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
-            } else {
-                VIR_INFO("Guest %s had an error and exited with status %d; destroying domain.",
-                         name, WEXITSTATUS(status));
-                virAcrnProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_UNKNOWN);
-            }
+        if (mon->reboot) {
+            VIR_INFO("Domain %s shutdown. Restarting domain.", vm->def->name);
+            virAcrnProcessRestart(driver, vm);
+        } else {
+            /* Technically we need to specify reason based on exit value and
+             * status (i.e., normal exit, non-zero exit, or if the acrn-dm has
+             * crashed). But by design only parent process can collect child
+             * status, so we specify reason as "shutdown" directly.
+             */
+            VIR_INFO("Domain %s shutdown", vm->def->name);
+            virAcrnProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
+            if (!vm->persistent)
+                virDomainObjListRemove(driver->domains, vm);
         }
     }
-#endif
-    (void)watch;
-    (void)kq;
-    (void)opaque;
+
 }
 
 static acrnMonitor *
 acrnMonitorOpenImpl(virDomainObj *vm, struct _acrnConn *driver)
 {
     acrnMonitor *mon;
+    int pidfd;
 
     if (acrnMonitorInitialize() < 0)
         return NULL;
@@ -194,23 +162,13 @@ acrnMonitorOpenImpl(virDomainObj *vm, struct _acrnConn *driver)
     virObjectRef(vm);
     mon->vm = vm;
 
-#if 0
-    struct kevent kev;
-
-    mon->kq = kqueue();
-    if (mon->kq < 0) {
-        virReportError(VIR_ERR_SYSTEM_ERROR, "%s",
-                       _("Unable to create kqueue"));
+    pidfd = syscall(SYS_pidfd_open, vm->pid, 0);
+    if (pidfd == -1) {
+        virReportSystemError(errno, "%s", "unable to open pidfd");
         goto cleanup;
     }
 
-    EV_SET(&kev, vm->pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, mon);
-    if (kevent(mon->kq, &kev, 1, NULL, 0, NULL) < 0) {
-        virReportError(VIR_ERR_SYSTEM_ERROR, "%s",
-                       _("Unable to register process kevent"));
-        goto cleanup;
-    }
-#endif
+    mon->fd = pidfd;
 
     if (!acrnMonitorRegister(mon)) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
@@ -246,5 +204,7 @@ acrnMonitorClose(acrnMonitor *mon)
     VIR_DEBUG("cleaning up acrnMonitor %p", mon);
 
     acrnMonitorUnregister(mon);
+    if (mon->fd)
+        VIR_FORCE_CLOSE(mon->fd);
     virObjectUnref(mon);
 }
