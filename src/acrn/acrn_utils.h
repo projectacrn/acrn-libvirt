@@ -27,6 +27,7 @@
 #include "configmake.h"
 #include "virdomainobjlist.h"
 #include "virthread.h"
+#include "virhostdev.h"
 #include "hypervisor/virclosecallbacks.h"
 #include "virportallocator.h"
 
@@ -63,6 +64,8 @@ struct _acrnConn {
     virObjectEventState *domainEventState;
 
     virPortAllocatorRange *remotePorts;
+
+    virHostdevManager *hostdevMgr;
 
     unsigned acrncaps;
     unsigned grubcaps;

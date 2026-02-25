@@ -286,6 +286,37 @@ acrnVMIsLapicPT(virDomainObj *vm G_GNUC_UNUSED)
     return false;
 }
 
+static int
+acrnHostdevPrepareDomainDevices(acrnConn *driver, virDomainDef *def, unsigned int flags)
+{
+    ssize_t i;
+
+    for (i = 0; i < def->nhostdevs; i++) {
+        virDomainHostdevDef *hostdev = def->hostdevs[i];
+        virDomainHostdevSubsysPCI *pcisrc = &hostdev->source.subsys.u.pci;
+
+        if (hostdev->mode == VIR_DOMAIN_HOSTDEV_MODE_SUBSYS &&
+            hostdev->source.subsys.type == VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_PCI &&
+            pcisrc->driver.name == VIR_DEVICE_HOSTDEV_PCI_DRIVER_NAME_DEFAULT) {
+            pcisrc->driver.name = VIR_DEVICE_HOSTDEV_PCI_DRIVER_NAME_KVM;
+        }
+
+    }
+
+    /* Currently we prepare only PCI device */
+    return virHostdevPreparePCIDevices(driver->hostdevMgr, "acrn",
+            def->name, def->uuid, def->hostdevs, def->nhostdevs, flags);
+}
+
+static void
+acrnHostdevReAttachDomainDevices(acrnConn *driver,
+                                 const char *name,
+                                 virDomainHostdevDef **hostdevs,
+                                 int nhostdevs)
+{
+    virHostdevReAttachPCIDevices(driver->hostdevMgr, "acrn", name, hostdevs, nhostdevs);
+}
+
 int
 acrnProcessPrepareDomain(acrnConn *driver,
                           virDomainObj *vm,
@@ -296,6 +327,9 @@ acrnProcessPrepareDomain(acrnConn *driver,
     if (acrnVMIsLapicPT(vm)) {
         ret = acrnOfflineCPUs(driver, vm);
     }
+
+    if (acrnHostdevPrepareDomainDevices(driver, vm->def, 0) < 0)
+        ret = -1;
 
     return ret;
 }
@@ -363,6 +397,10 @@ virAcrnProcessStop(struct _acrnConn *driver,
                      vm->def->name);
         }
     }
+
+    /* Passthrough device re-attach */
+    acrnHostdevReAttachDomainDevices(driver, vm->def->name, vm->def->hostdevs,
+            vm->def->nhostdevs);
 
     ret = 0;
 

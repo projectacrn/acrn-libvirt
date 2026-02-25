@@ -52,9 +52,11 @@
 #include "viraccessapicheck.h"
 #include "virhostcpu.h"
 #include "virhostmem.h"
+#include "virhostdev.h"
 #include "virportallocator.h"
 #include "conf/domain_capabilities.h"
 #include "virutil.h"
+#include "domain_driver.h"
 
 #include "acrn_conf.h"
 #include "acrn_device.h"
@@ -1137,6 +1139,7 @@ acrnStateCleanup(void)
     if (acrn_driver == NULL)
         return -1;
 
+    virObjectUnref(acrn_driver->hostdevMgr);
     virObjectUnref(acrn_driver->domains);
     virObjectUnref(acrn_driver->caps);
     virObjectUnref(acrn_driver->xmlopt);
@@ -1198,6 +1201,9 @@ acrnStateInitialize(bool privileged,
         goto cleanup;
 
     if (!(acrn_driver->domainEventState = virObjectEventStateNew()))
+        goto cleanup;
+
+    if (!(acrn_driver->hostdevMgr = virHostdevManagerGetDefault()))
         goto cleanup;
 
     if (!(acrn_driver->remotePorts = virPortAllocatorRangeNew(_("display"),
@@ -1478,6 +1484,48 @@ acrnDomainHasManagedSaveImage(virDomainPtr domain, unsigned int flags)
     return ret;
 }
 
+static int
+acrnNodeDeviceDetachFlags(virNodeDevicePtr dev,
+                           const char *driverName,
+                           unsigned int flags)
+{
+    acrnConn *driver = dev->conn->privateData;
+    virHostdevManager *hostdev_mgr = driver->hostdevMgr;
+
+    virCheckFlags(0, -1);
+
+    if (!driverName)
+        driverName = "acrn";
+
+    if (STRNEQ(driverName, "acrn")) {
+        virReportError(VIR_ERR_INVALID_ARG,
+                       _("unsupported driver name '%1$s'"), driverName);
+        return -1;
+    }
+
+    /* virNodeDeviceDetachFlagsEnsureACL() is being called by
+     * virDomainDriverNodeDeviceDetachFlags() */
+    return virDomainDriverNodeDeviceDetachFlags(dev, hostdev_mgr,
+                                                VIR_PCI_STUB_DRIVER_VFIO, NULL);
+}
+
+static int
+acrnNodeDeviceDettach(virNodeDevicePtr dev)
+{
+    return acrnNodeDeviceDetachFlags(dev, NULL, 0);
+}
+
+static int
+acrnNodeDeviceReAttach(virNodeDevicePtr dev)
+{
+    acrnConn *driver = dev->conn->privateData;
+    virHostdevManager *hostdev_mgr = driver->hostdevMgr;
+
+    /* virNodeDeviceReAttachEnsureACL() is being called by
+     * virDomainDriverNodeDeviceReAttach() */
+    return virDomainDriverNodeDeviceReAttach(dev, hostdev_mgr);
+}
+
 static const char *
 acrnConnectGetType(virConnectPtr conn)
 {
@@ -1645,6 +1693,9 @@ static virHypervisorDriver acrnHypervisorDriver = {
     .nodeGetCPUMap = acrnNodeGetCPUMap, /* 1.2.3 */
     .nodeGetMemoryParameters = acrnNodeGetMemoryParameters, /* 1.2.3 */
     .nodeSetMemoryParameters = acrnNodeSetMemoryParameters, /* 1.2.3 */
+    .nodeDeviceDettach = acrnNodeDeviceDettach, /* 1.2.3 */
+    .nodeDeviceDetachFlags = acrnNodeDeviceDetachFlags, /* 1.2.3 */
+    .nodeDeviceReAttach = acrnNodeDeviceReAttach, /* 1.2.3 */
     .connectBaselineCPU = acrnConnectBaselineCPU, /* 1.2.4 */
     .connectCompareCPU = acrnConnectCompareCPU, /* 1.2.4 */
     .connectDomainEventRegisterAny = acrnConnectDomainEventRegisterAny, /* 1.2.5 */
