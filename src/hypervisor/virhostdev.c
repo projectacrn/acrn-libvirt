@@ -248,6 +248,8 @@ virHostdevGetPCIHostDevice(const virDomainHostdevDef *hostdev,
         virPCIDeviceSetStubDriverType(actual, VIR_PCI_STUB_DRIVER_VFIO);
     } else if (pcisrc->driver.name == VIR_DEVICE_HOSTDEV_PCI_DRIVER_NAME_XEN) {
         virPCIDeviceSetStubDriverType(actual, VIR_PCI_STUB_DRIVER_XEN);
+    } else if (pcisrc->driver.name == VIR_DEVICE_HOSTDEV_PCI_DRIVER_NAME_KVM) {
+        virPCIDeviceSetStubDriverType(actual, VIR_PCI_STUB_DRIVER_KVM);
     } else {
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
                        _("pci backend driver type '%1$s' is not supported"),
