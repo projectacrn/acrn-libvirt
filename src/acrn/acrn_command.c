@@ -115,36 +115,37 @@ static int
 acrnBuildConsoleArgStr(const virDomainDef *def, virCommand *cmd)
 {
     virDomainChrDef *chr = NULL;
+    ssize_t i;
 
-    if (!def->nserials)
-        return 0;
+    /* According to libvirt documentation:
+     * Due to historical reasons, the serial and console elements have
+     * partially overlapping scopes.
+     */
 
-    chr = def->serials[0];
+    /* Serial devices */
+    for (i = 0; i < def->nserials; i++) {
+        chr = def->serials[i];
+        if (chr->source->type != VIR_DOMAIN_CHR_TYPE_PTY &&
+            chr->source->type != VIR_DOMAIN_CHR_TYPE_DEV &&
+            chr->source->type != VIR_DOMAIN_CHR_TYPE_STDIO) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                    "only pty, dev and stdio serial types are supported");
+            return -1;
+        }
 
-    if (chr->source->type != VIR_DOMAIN_CHR_TYPE_PTY &&
-        chr->source->type != VIR_DOMAIN_CHR_TYPE_DEV &&
-        chr->source->type != VIR_DOMAIN_CHR_TYPE_TCP &&
-        chr->source->type != VIR_DOMAIN_CHR_TYPE_STDIO) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("only pty, dev, stdio and tcp serial source types are supported"));
-        return -1;
-    }
+        if (chr->target.port > 2) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                    _("only two serial ports are supported"));
+            return -1;
+        }
 
-    if (chr->target.port > 4) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                       _("only four serial ports are supported"));
-        return -1;
-    }
-
-    virCommandAddArg(cmd, "-l");
-    if (chr->source->type == VIR_DOMAIN_CHR_TYPE_STDIO) {
-        virCommandAddArgFormat(cmd, "com%d,stdio", chr->target.port + 1);
-    } else if (chr->source->type == VIR_DOMAIN_CHR_TYPE_TCP) {
-        virCommandAddArgFormat(cmd, "com%d,tcp:%s", chr->target.port + 1,
-                chr->source->data.tcp.service);
-    } else {
-        virCommandAddArgFormat(cmd, "com%d,%s",
-                chr->target.port + 1, chr->source->data.file.path);
+        virCommandAddArg(cmd, "-l");
+        if (chr->source->type == VIR_DOMAIN_CHR_TYPE_STDIO) {
+            virCommandAddArgFormat(cmd, "com%d,stdio", chr->target.port + 1);
+        } else {
+            virCommandAddArgFormat(cmd, "com%d,%s",
+                    chr->target.port + 1, chr->source->data.file.path);
+        }
     }
 
     return 0;

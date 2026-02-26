@@ -997,13 +997,16 @@ acrnDomainReboot(virDomainPtr dom, unsigned int flags)
 
 static int
 acrnDomainOpenConsole(virDomainPtr dom,
-                       const char *dev_name G_GNUC_UNUSED,
+                       const char *dev_name,
                        virStreamPtr st,
                        unsigned int flags)
 {
     virDomainObj *vm = NULL;
     virDomainChrDef *chr = NULL;
+    acrnDomainObjPrivate *priv;
     int ret = -1;
+    int dupfd = -1;
+    ssize_t i = 0;
 
     virCheckFlags(0, -1);
 
@@ -1016,19 +1019,45 @@ acrnDomainOpenConsole(virDomainPtr dom,
     if (virDomainObjCheckActive(vm) < 0)
         goto cleanup;
 
-    if (!vm->def->nserials) {
+    priv = vm->privateData;
+    if (dev_name) {
+        for (i = 0; !chr && i < vm->def->nserials; i++) {
+            if (STREQ(dev_name, vm->def->serials[i]->info.alias)) {
+                chr = vm->def->serials[i];
+                break;
+            }
+        }
+    } else if (vm->def->nconsoles) {
+        chr = vm->def->consoles[0];
+        if (chr->targetType == VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL)
+            chr = vm->def->serials[0];
+    }
+
+    if (!chr) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
-                       "%s", _("no console devices available"));
+                       _("cannot find character device %1$s"),
+                       NULLSTR(dev_name));
         goto cleanup;
     }
 
-    chr = vm->def->serials[0];
-
-    if (virFDStreamOpenPTY(st, chr->source->data.nmdm.slave,
-                           0, 0, O_RDWR) < 0)
+    if (chr->source->type != VIR_DOMAIN_CHR_TYPE_PTY) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("character device %1$s is not using a PTY"),
+                       dev_name ? dev_name : NULLSTR(chr->info.alias));
         goto cleanup;
+    }
 
-    ret = 0;
+    if ((dupfd = dup(priv->ttyfds[i])) < 0) {
+        virReportSystemError(errno, "%s", "dupfd");
+        goto cleanup;
+    }
+
+    /* handle mutually exclusive access to console devices */
+    ret = virFDStreamOpen(st, dupfd);
+    if (ret < 0) {
+        VIR_FORCE_CLOSE(dupfd);
+        goto cleanup;
+    }
 
  cleanup:
     virDomainObjEndAPI(&vm);

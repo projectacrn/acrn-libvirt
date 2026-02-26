@@ -25,6 +25,7 @@
 #include "domain_conf.h"
 
 #include "acrn_monitor.h"
+#include "virchrdev.h"
 
 typedef struct _acrnDomainObjPrivate acrnDomainObjPrivate;
 struct _acrnDomainObjPrivate {
@@ -33,6 +34,9 @@ struct _acrnDomainObjPrivate {
     virDomainPCIAddressSet *pciaddrs;
     bool persistentAddrs;
 
+    virChrdevs *devs;
+
+    int *ttyfds;
     acrnMonitor *mon;
 };
 

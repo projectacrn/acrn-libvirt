@@ -41,6 +41,11 @@ acrnDomainObjPrivateAlloc(void *opaque)
 
     priv->driver = opaque;
 
+    if (!(priv->devs = virChrdevAlloc())) {
+        g_free(priv);
+        return NULL;
+    }
+
     return priv;
 }
 
@@ -51,6 +56,7 @@ acrnDomainObjPrivateFree(void *data)
 
     virDomainPCIAddressSetFree(priv->pciaddrs);
 
+    virChrdevFree(priv->devs);
     g_free(priv);
 }
 

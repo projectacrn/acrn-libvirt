@@ -317,6 +317,56 @@ acrnHostdevReAttachDomainDevices(acrnConn *driver,
     virHostdevReAttachPCIDevices(driver->hostdevMgr, "acrn", name, hostdevs, nhostdevs);
 }
 
+static void
+acrnCleanupConsoleTty(virDomainObj *vm)
+{
+    ssize_t i;
+    acrnDomainObjPrivate *priv = vm->privateData;
+
+    for (i = 0; i < vm->def->nserials; i++) {
+        VIR_FORCE_CLOSE(priv->ttyfds[i]);
+    }
+
+    VIR_FREE(priv->ttyfds);
+}
+
+static int
+acrnPrepareConsoleTty(virDomainObj *vm)
+{
+    ssize_t i;
+    char *ttyPath = NULL;
+    acrnDomainObjPrivate *priv = vm->privateData;
+
+    if (!vm->def->nserials)
+        return 0;
+
+    if (priv->ttyfds == NULL) {
+        priv->ttyfds = g_new(int, vm->def->nserials);
+        for (i = 0; i < vm->def->nserials; i++)
+            priv->ttyfds[i] = -1;
+    }
+
+    for (i = 0; i < vm->def->nserials; i++) {
+        if (virFileOpenTty(&priv->ttyfds[i], &ttyPath, 1) < 0) {
+            virReportSystemError(errno, "%s", "failed to allocate tty");
+            goto cleanup;
+        }
+
+        VIR_INFO("TTY %s opened", ttyPath);
+        VIR_FREE(vm->def->serials[i]->source->data.file.path);
+        vm->def->serials[i]->source->data.file.path = g_strdup(ttyPath);
+    }
+
+    VIR_FREE(ttyPath);
+    return 0;
+
+cleanup:
+    acrnCleanupConsoleTty(vm);
+    VIR_FREE(ttyPath);
+
+    return -1;
+}
+
 int
 acrnProcessPrepareDomain(acrnConn *driver,
                           virDomainObj *vm,
@@ -329,6 +379,9 @@ acrnProcessPrepareDomain(acrnConn *driver,
     }
 
     if (acrnHostdevPrepareDomainDevices(driver, vm->def, 0) < 0)
+        ret = -1;
+
+    if (acrnPrepareConsoleTty(vm) < 0)
         ret = -1;
 
     return ret;
@@ -401,6 +454,8 @@ virAcrnProcessStop(struct _acrnConn *driver,
     /* Passthrough device re-attach */
     acrnHostdevReAttachDomainDevices(driver, vm->def->name, vm->def->hostdevs,
             vm->def->nhostdevs);
+
+    acrnCleanupConsoleTty(vm);
 
     ret = 0;
 
