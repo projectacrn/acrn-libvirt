@@ -137,8 +137,7 @@ acrnMonitorIO(int watch, int fd, int events, void *opaque)
              */
             VIR_INFO("Domain %s shutdown", vm->def->name);
             virAcrnProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
-            if (!vm->persistent)
-                virDomainObjListRemove(driver->domains, vm);
+            virAcrnDomainRemoveInactive(driver, vm);
         }
     }
 

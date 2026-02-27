@@ -878,8 +878,7 @@ acrnDomainCreateXML(virConnectPtr conn,
                              VIR_DOMAIN_RUNNING_BOOTED,
                              start_flags) < 0) {
         /* If domain is not persistent, remove its data */
-        if (!vm->persistent)
-            virDomainObjListRemove(privconn->domains, vm);
+        virAcrnDomainRemoveInactive(privconn, vm);
         goto cleanup;
     }
 
@@ -921,8 +920,7 @@ acrnDomainDestroyFlags(virDomainPtr dom, unsigned int flags)
                                               VIR_DOMAIN_EVENT_STOPPED,
                                               VIR_DOMAIN_EVENT_STOPPED_DESTROYED);
 
-    if (!vm->persistent)
-        virDomainObjListRemove(privconn->domains, vm);
+    virAcrnDomainRemoveInactive(privconn, vm);
 
  cleanup:
     virDomainObjEndAPI(&vm);

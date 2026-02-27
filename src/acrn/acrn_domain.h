@@ -40,6 +40,9 @@ struct _acrnDomainObjPrivate {
     acrnMonitor *mon;
 };
 
+void virAcrnDomainRemoveInactive(struct _acrnConn *driver,
+                                 virDomainObj *vm);
+
 virDomainXMLOption *virAcrnDriverCreateXMLConf(struct _acrnConn *);
 
 extern virDomainXMLPrivateDataCallbacks virAcrnDriverPrivateDataCallbacks;

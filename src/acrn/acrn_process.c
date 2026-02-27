@@ -30,6 +30,7 @@
 #include "acrn_device.h"
 #include "acrn_driver.h"
 #include "acrn_command.h"
+#include "acrn_domain.h"
 #include "acrn_firmware.h"
 #include "acrn_monitor.h"
 #include "acrn_process.h"
@@ -60,8 +61,7 @@ acrnProcessAutoDestroy(virDomainObj *vm,
 
     virAcrnProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_DESTROYED);
 
-    if (!vm->persistent)
-        virDomainObjListRemove(driver->domains, vm);
+    virAcrnDomainRemoveInactive(driver, vm);
 }
 
 static void
@@ -584,6 +584,7 @@ virAcrnProcessReconnect(virDomainObj *vm,
                              VIR_DOMAIN_SHUTOFF_UNKNOWN);
         ignore_value(virDomainObjSave(vm, data->driver->xmlopt,
                                       ACRN_STATE_DIR));
+        virAcrnDomainRemoveInactive(data->driver, vm);
     }
 
     virObjectUnlock(vm);

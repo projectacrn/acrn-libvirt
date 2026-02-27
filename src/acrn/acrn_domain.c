@@ -34,6 +34,16 @@
 
 VIR_LOG_INIT("acrn.acrn_domain");
 
+void
+virAcrnDomainRemoveInactive(struct _acrnConn *driver,
+                            virDomainObj *vm)
+{
+    if (vm->persistent)
+        return;
+
+    virDomainObjListRemove(driver->domains, vm);
+}
+
 static void *
 acrnDomainObjPrivateAlloc(void *opaque)
 {
