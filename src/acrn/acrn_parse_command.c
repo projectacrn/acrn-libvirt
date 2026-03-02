@@ -125,7 +125,7 @@ acrnCommandLineToArgv(const char *nativeConfig,
                       char ***acrn_argv)
 {
     const char *curr = NULL;
-    char *nativeConfig_unescaped = NULL;
+    g_autofree char *nativeConfig_unescaped = NULL;
     const char *start;
     const char *next;
     char *line;
