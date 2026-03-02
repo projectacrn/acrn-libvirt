@@ -770,8 +770,8 @@ acrnParseAcrnCommandLine(virDomainDef *def,
             if (acrnParseAcrnPCIArg(def,
                                       xmlopt,
                                       caps,
-                                      &nahcidisks,
                                       &nvirtiodisks,
+                                      &nahcidisks,
                                       arg))
                 return -1;
             break;
