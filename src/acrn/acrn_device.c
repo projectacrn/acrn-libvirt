@@ -206,8 +206,6 @@ int acrnDomainAssignPCIAddresses(virDomainDef *def,
             virDomainPCIAddressSetFree(priv->pciaddrs);
             priv->persistentAddrs = 1;
             priv->pciaddrs = addrs;
-        } else {
-            priv->persistentAddrs = 0;
         }
     }
 

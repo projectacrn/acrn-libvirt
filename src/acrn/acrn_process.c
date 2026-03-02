@@ -127,7 +127,7 @@ virAcrnProcessStartImpl(struct _acrnConn *driver,
     g_autoptr(virCommand) cmd = NULL;
     g_autoptr(virCommand) load_cmd = NULL;
     acrnDomainObjPrivate *priv = vm->privateData;
-    int ret = -1, rc;
+    int ret = -1;
 
     logfile = g_strdup_printf("%s/%s.log", ACRN_LOG_DIR, vm->def->name);
     if ((logfd = open(logfile, O_WRONLY | O_APPEND | O_CREAT,
@@ -195,13 +195,6 @@ virAcrnProcessStartImpl(struct _acrnConn *driver,
     ret = 0;
 
  cleanup:
-    if (devicemap != NULL) {
-        rc = unlink(devmap_file);
-        if (rc < 0 && errno != ENOENT)
-            virReportSystemError(errno, _("cannot unlink file '%1$s'"),
-                                 devmap_file);
-    }
-
     if (ret < 0) {
         int exitstatus; /* Needed to avoid logging non-zero status */
         g_autoptr(virCommand) destroy_cmd = NULL;
