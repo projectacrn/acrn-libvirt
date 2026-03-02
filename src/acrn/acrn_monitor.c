@@ -30,6 +30,7 @@
 #include "acrn_domain.h"
 #include "acrn_monitor.h"
 #include "acrn_process.h"
+#include "domain_event.h"
 #include "viralloc.h"
 #include "virerror.h"
 #include "virfile.h"
@@ -114,6 +115,8 @@ acrnMonitorIO(int watch, int fd, int events, void *opaque)
     acrnMonitor *mon = opaque;
     virDomainObj *vm = mon->vm;
     struct _acrnConn *driver = mon->driver;
+    virObjectEvent *shutdownEvent = NULL;
+    virObjectEvent *stoppedEvent = NULL;
 
     if (watch != mon->watch || fd != mon->fd) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
@@ -126,6 +129,13 @@ acrnMonitorIO(int watch, int fd, int events, void *opaque)
     if (events & (VIR_EVENT_HANDLE_READABLE | VIR_EVENT_HANDLE_HANGUP)) {
         /* acrn-dm process has exited */
 
+        virObjectLock(vm);
+
+        if (!virDomainObjIsActive(vm)) {
+            virObjectUnlock(vm);
+            return;
+        }
+
         if (mon->reboot) {
             VIR_INFO("Domain %s shutdown. Restarting domain.", vm->def->name);
             virAcrnProcessRestart(driver, vm);
@@ -136,9 +146,22 @@ acrnMonitorIO(int watch, int fd, int events, void *opaque)
              * status, so we specify reason as "shutdown" directly.
              */
             VIR_INFO("Domain %s shutdown", vm->def->name);
+
+            shutdownEvent = virDomainEventLifecycleNewFromObj(vm,
+                                                              VIR_DOMAIN_EVENT_SHUTDOWN,
+                                                              VIR_DOMAIN_EVENT_SHUTDOWN_FINISHED);
             virAcrnProcessStop(driver, vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
+
+            stoppedEvent = virDomainEventLifecycleNewFromObj(vm,
+                                                             VIR_DOMAIN_EVENT_STOPPED,
+                                                             VIR_DOMAIN_EVENT_STOPPED_SHUTDOWN);
             virAcrnDomainRemoveInactive(driver, vm);
         }
+
+        virObjectUnlock(vm);
+
+        virObjectEventStateQueue(driver->domainEventState, shutdownEvent);
+        virObjectEventStateQueue(driver->domainEventState, stoppedEvent);
     }
 
 }
