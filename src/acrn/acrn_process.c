@@ -577,10 +577,11 @@ virAcrnProcessReconnect(virDomainObj *vm,
                              VIR_DOMAIN_SHUTOFF_UNKNOWN);
         ignore_value(virDomainObjSave(vm, data->driver->xmlopt,
                                       ACRN_STATE_DIR));
+        virObjectUnlock(vm);
         virAcrnDomainRemoveInactive(data->driver, vm);
+    } else {
+        virObjectUnlock(vm);
     }
-
-    virObjectUnlock(vm);
 
     return ret;
 }
