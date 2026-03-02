@@ -476,7 +476,7 @@ acrnParsePCINet(virDomainDef *def,
     const char *mac = NULL;
 
     if (!(net = virDomainNetDefNew(xmlopt)))
-        goto cleanup;
+        return -1;
 
     /* As we only support interface type='bridge' and cannot
      * guess the actual bridge name from the command line,
