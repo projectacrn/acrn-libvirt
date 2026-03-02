@@ -90,7 +90,7 @@ static int
 acrnParseMemsize(const char *arg, size_t *ret_memsize)
 {
     size_t val;
-    int error;
+    int error = -1;
 
     if (virStrToLong_ul(arg, NULL, 10, &val) == 0) {
         /*
