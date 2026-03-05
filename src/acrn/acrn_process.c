@@ -550,7 +550,7 @@ virAcrnProcessReconnect(virDomainObj *vm,
 {
     struct acrnProcessReconnectData *data = opaque;
     acrnDomainObjPrivate *priv = vm->privateData;
-    int ret = -1;
+    int ret = 0;
 
     if (!virDomainObjIsActive(vm))
         return 0;
